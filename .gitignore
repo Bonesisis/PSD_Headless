@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Vorlagen, Schriften und Ausgaben können groß oder lizenzpflichtig sein.
+assets/templates/
+assets/fonts/
+assets/config/
+out/

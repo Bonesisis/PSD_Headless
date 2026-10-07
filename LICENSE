@@ -1,0 +1,89 @@
+PRIVATE USE ONLY LICENSE
+Version 1.0, 7 October 2026
+
+Copyright (c) 2026 Luca-Gene Bonzel
+All rights reserved except as expressly granted below.
+
+1. Definitions
+
+"Software" means this source code, its documentation, examples, builds,
+modifications, and derivative works.
+
+"Private Use" means use by a natural person solely for personal learning,
+experimentation, or a private hobby, outside any professional, commercial,
+institutional, organizational, or work-related context.
+
+"Work Use" means any use connected to employment, self-employment, freelance
+or contract work, an internship, a client, a customer, a business, a public or
+private organization, an institution, a production workflow, or an activity
+intended to create direct or indirect income, compensation, commercial
+advantage, or professional benefit.
+
+2. Private-use grant
+
+Subject to this License, Luca-Gene Bonzel grants each natural person a
+worldwide, royalty-free, non-exclusive, revocable license to download, run,
+study, copy, modify, and extend the Software solely for Private Use.
+
+You may keep private copies and private modifications. You may also publish
+source-code-only copies or forks for non-monetized hobby collaboration, but
+only if:
+
+  a. this License and the copyright notice remain complete and unchanged;
+  b. the repository, fork, or distribution is not sold, sponsored, monetized,
+     paywalled, or used to advertise or provide a paid product or service; and
+  c. recipients receive no broader rights than this License grants.
+
+3. Prohibited use
+
+The Software must not be used, in whole or in part:
+
+  a. for Work Use;
+  b. at or for a workplace, employer, client, customer, company, agency,
+     association, public authority, school, university, nonprofit, or other
+     organization;
+  c. in an internal tool, production system, hosted service, software as a
+     service, paid product, client deliverable, professional portfolio project,
+     or revenue-generating workflow;
+  d. to earn money, fees, wages, advertising revenue, sponsorship, donations,
+     commercial advantage, or any other direct or indirect compensation;
+  e. to sell, sublicense, rent, lease, commercially host, or commercially
+     distribute the Software or a derivative work; or
+  f. to remove or conceal the copyright notice or this License.
+
+The fact that a use is free of charge does not make it Private Use when it is
+performed for or within a professional, institutional, organizational, or
+work-related context.
+
+4. No implied permission
+
+No patent, trademark, trade name, branding, or other right is granted. Any use
+outside the permissions above requires prior written permission from
+Luca-Gene Bonzel.
+
+5. Termination
+
+Any violation automatically terminates the rights granted by this License.
+Upon termination, all use of the Software must stop and all deployed or shared
+copies must be removed. Sections 3, 4, 6, and 7 survive termination.
+
+6. Disclaimer of warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. USE IS ENTIRELY AT YOUR
+OWN RISK.
+
+7. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, LUCA-GENE BONZEL SHALL NOT BE LIABLE
+FOR ANY CLAIM, DAMAGE, LOSS, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE
+SOFTWARE OR ITS USE, WHETHER IN CONTRACT, TORT, OR OTHERWISE.
+
+8. Severability
+
+If any provision is found unenforceable, it shall be narrowed only as much as
+necessary, and the remaining provisions shall continue in effect.
+
+This is a source-available license, not an open-source license as defined by the
+Open Source Initiative.

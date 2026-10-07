@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psd-headless"
+version = "0.3.0"
+description = "Headless PSD-Vorlagen rendern und als PNG auf NAS-Speicher exportieren"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Luca-Gene Bonzel" }]
+license = { file = "LICENSE" }
+dependencies = [
+  "Pillow>=10.0",
+  "numpy>=1.24",
+  "psd-tools[composite]>=1.23,<2",
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.scripts]
+psd-headless = "pshl.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pshl*"]

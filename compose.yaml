@@ -1,0 +1,11 @@
+services:
+  psd-headless:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - "${PSHL_TEMPLATE_DIR:-./assets/templates}:/templates:ro"
+      - "${PSHL_FONT_DIR:-./assets/fonts}:/fonts:ro"
+      - "${PSHL_CONFIG_DIR:-./assets/config}:/config:ro"
+      - "${PSHL_OUTPUT_DIR:-./out/jobs}:/output"
+    restart: unless-stopped
