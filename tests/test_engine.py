@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 from psd_tools import PSDImage
+from psd_tools.api.layers import Group, PixelLayer
 
 from pshl.engine import RenderError, font_file, inspect_psd, render_job
 from pshl.jobs import parse_jobs, run_batch
@@ -118,3 +119,39 @@ def test_ambiguous_and_hidden_targets(tmp_path):
     psd.save(job["template"])
     with pytest.raises(RenderError, match="ausgeblendet"):
         render_job(job, True)
+
+
+def test_duplicate_names_need_full_path(tmp_path):
+    job, _ = fixture(tmp_path)
+    psd = PSDImage.open(job["template"])
+    group = Group.new(psd, name="Other")
+    PixelLayer.frompil(Image.new("RGB", (20, 20), "white"), group, name="Title")
+    psd.save(job["template"])
+    with pytest.raises(RenderError, match="2 Treffer"):
+        render_job(dict(job, layers={"Title": "Hello"}), True)
+    assert render_job(job, True)["status"] == "checked"
+
+
+def test_missing_glyph_and_mask_rejected(tmp_path):
+    job, _ = fixture(tmp_path)
+    with pytest.raises(RenderError, match="Zeichen nicht"):
+        render_job(dict(job, layers={"Title": "🙂"}), True)
+    psd = PSDImage.open(job["template"])
+    psd[1][0][0].create_mask(Image.new("L", (210, 50), 255), left=15, top=20)
+    psd.save(job["template"])
+    with pytest.raises(RenderError, match="Maske"):
+        render_job(job, True)
+
+
+def test_reserved_outputs_survive_failure(tmp_path):
+    job, _ = fixture(tmp_path)
+    original = b"Existing output must remain unchanged"
+    Path(job["output"]).write_bytes(original)
+    report = run_batch([job])
+    assert report["errors"] == 1
+    assert Path(job["output"]).read_bytes() == original
+    report_path = tmp_path / "existing-report.json"
+    report_path.write_bytes(original)
+    with pytest.raises(FileExistsError):
+        run_batch([job], report_path=report_path)
+    assert report_path.read_bytes() == original
