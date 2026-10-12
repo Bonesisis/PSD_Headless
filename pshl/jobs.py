@@ -22,7 +22,7 @@ def parse_jobs(raw, extension=".json"):
         for row in csv.DictReader(io.StringIO(raw)):
             try:
                 row["layers"] = json.loads(row["layers"])
-                for field in ("styles", "fonts"):
+                for field in ("styles", "fonts", "smart_objects"):
                     if row.get(field):
                         row[field] = json.loads(row[field])
                     else:
@@ -74,11 +74,21 @@ def normalize(job, template_root, output_root, font=None, restricted=False):
     for style in job["styles"].values():
         if style.get("font"):
             style["font"] = str(resolve_path(style["font"], template_root))
+    job["smart_objects"] = {k: dict(v) for k, v in job.get("smart_objects", {}).items()}
+    for spec in job["smart_objects"].values():
+        if spec.get("font"):
+            spec["font"] = str(resolve_path(spec["font"], template_root))
+        spec["targets"] = [dict(target) for target in spec.get("targets", [])]
+        for target in spec["targets"]:
+            if target.get("font"):
+                target["font"] = str(resolve_path(target["font"], template_root))
     if restricted:
         for path in [
             job.get("font"),
             *job["fonts"].values(),
             *(s.get("font") for s in job["styles"].values()),
+            *(s.get("font") for s in job["smart_objects"].values()),
+            *(t.get("font") for s in job["smart_objects"].values() for t in s["targets"]),
         ]:
             if path and not Path(path).is_relative_to(Path(template_root).resolve()):
                 raise RenderError("Schriftdatei muss im Vorlagenordner liegen")

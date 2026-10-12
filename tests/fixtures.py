@@ -65,8 +65,8 @@ def engine_value(value):
     return ed.String(value)
 
 
-def make_template(path, font_name="SyntheticTest-Regular"):
-    psd = PSDImage.new("RGB", (240, 120), color=(255, 255, 255))
+def make_template(path, font_name="SyntheticTest-Regular", depth=8):
+    psd = PSDImage.new("RGB", (240, 120), color=(255, 255, 255), depth=depth)
     PixelLayer.frompil(Image.new("RGB", (240, 120), "#142938"), psd, name="Background")
     group = Group.new(psd, name="Card")
     nested = Group.new(group, name="Content")
@@ -122,12 +122,12 @@ def make_template(path, font_name="SyntheticTest-Regular"):
     return profile
 
 
-def fixture(directory):
+def fixture(directory, depth=8):
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)
     font, template = root / "synthetic.ttf", root / "template.psd"
     synthetic_font(font)
-    profile = make_template(template)
+    profile = make_template(template, depth=depth)
     job = {
         "template": str(template),
         "output": str(root / "result.png"),

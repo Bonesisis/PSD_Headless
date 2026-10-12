@@ -7,7 +7,8 @@ Photoshop-compatible rendering engine. Never promise full fidelity or editable
 replacement text in exported PSDs. Preserve source files and reject unsupported
 styles rather than silently changing them.
 
-- `pshl/engine.py`: recursive layer selection, strict typography, image export.
+- `pshl/engine.py`: recursive layer selection, strict typography, embedded
+  Smart Object text replacement, and image export.
 - `pshl/jobs.py`: JSON/YAML/CSV parsing, isolated jobs, bounded process workers.
 - `pshl/cli.py`: inspect, render, batch, serve.
 - `pshl/api.py`: authenticated background batches, status, reports, static UI.

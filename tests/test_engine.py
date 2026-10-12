@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -8,7 +9,7 @@ from PIL import Image
 from psd_tools import PSDImage
 from psd_tools.api.layers import Group, PixelLayer
 
-from pshl.engine import RenderError, font_file, inspect_psd, render_job
+from pshl.engine import RenderError, _prepare_smart_objects, font_file, inspect_psd, render_job
 from pshl.jobs import parse_jobs, run_batch
 from tests.fixtures import fixture
 
@@ -66,6 +67,111 @@ def test_shrink_and_overflow(tmp_path):
         render_job(job, True)
     job["shrink"] = True
     assert any("verkleinert" in w for w in render_job(job, True)["warnings"])
+
+
+def test_rgb_16bit_template_text_render(tmp_path):
+    job, _ = fixture(tmp_path, depth=16)
+    assert render_job(job, True)["status"] == "checked"
+    result = render_job(job)
+    assert result["status"] == "success"
+    with Image.open(job["output"]) as image:
+        assert image.size == (240, 120)
+
+
+def test_smart_object_job_validation_and_centered_layout(tmp_path):
+    from pshl.engine import layout_text
+
+    job, _ = fixture(tmp_path)
+    job["layers"] = {}
+    job["smart_objects"] = {
+        "title": {
+            "text": "New title",
+            "targets": [{"layer": "Missing smart object", "text_layer": "Title"}],
+        }
+    }
+    with pytest.raises(RenderError, match="0 Treffer"):
+        render_job(job, True)
+    font = str(tmp_path / "synthetic.ttf")
+    image, _ = layout_text(
+        "Hi",
+        (100, 50),
+        {
+            "font": font,
+            "size": 15,
+            "color": (255, 0, 0, 255),
+            "align": "center",
+            "valign": "center",
+        },
+    )
+    bbox = image.getbbox()
+    assert bbox is not None
+    assert abs((bbox[1] + bbox[3]) / 2 - 25) <= 1
+
+
+def test_embedded_smart_object_text_fans_out_to_multiple_artboards(tmp_path, monkeypatch):
+    job, _ = fixture(tmp_path)
+    original_open = PSDImage.open
+    monkeypatch.setattr(PSDImage, "open", lambda _source: original_open(job["template"]))
+
+    class EmbeddedObject:
+        kind = "data"
+        data = b"synthetic embedded PSD"
+
+        def __init__(self, left):
+            self._placed_layer = SimpleNamespace(
+                transform=(left, 0, left + 240, 0, left + 240, 120, left, 120)
+            )
+
+        def is_psd(self):
+            return True
+
+    class SmartLayer:
+        kind = "smartobject"
+        clipping = False
+
+        def __init__(self, left, name):
+            self.name = name
+            self.smart_object = EmbeddedObject(left)
+
+        def is_group(self):
+            return False
+
+        def is_visible(self):
+            return True
+
+        def has_mask(self):
+            return False
+
+        def has_vector_mask(self):
+            return False
+
+        def has_effects(self):
+            return False
+
+    class SmartDocument(list):
+        width = 500
+        height = 200
+
+    root = SmartDocument(
+        [SmartLayer(0, "Artwork Smart Object"), SmartLayer(250, "Cover Smart Object")]
+    )
+    specifications = {
+        "headline": {
+            "text": "A centered title",
+            "font": job["font"],
+            "size": 20,
+            "color": "#ff0000",
+            "targets": [
+                {"layer": "Artwork Smart Object", "text_layer": "Card/Content/Title"},
+                {"layer": "Cover Smart Object", "text_layer": "Card/Content/Title"},
+            ],
+        }
+    }
+    prepared, warnings = _prepare_smart_objects(root, specifications)
+    assert len(prepared) == 2
+    assert [(item[2], item[3]) for item in prepared] == [(0, 0), (250, 0)]
+    assert all(item[1].size == (240, 120) for item in prepared)
+    assert len([warning for warning in warnings if "ersetzt" in warning]) == 2
 
 
 @pytest.mark.parametrize("workers", [1, 2])

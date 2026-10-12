@@ -22,13 +22,17 @@ Die Engine verwendet psd-tools und Pillow, nicht die Photoshop-Rendering-Engine.
   JPG flacht Transparenz auf `background` ab (Standard Weiß).
 - PSD behält Gruppen und nicht ersetzte Ebenen. **Ersetzte Texte werden zu
   Pixelebenen**, nicht zu weiter editierbaren Photoshop-Textebenen.
-- Unterstützt RGB mit 8 Bit. Gemischte Textformatierung, verzerrter Text,
+- Unterstützt RGB mit 8 oder 16 Bit als Eingabe; PNG/JPG-Ausgaben sind 8 Bit.
+  Gemischte Textformatierung, verzerrter Text,
   Schriftsonderformatierung und Masken/Effekte am Textziel werden abgelehnt.
   Die Wiedergabe anderer komplexer Ebenen hängt von psd-tools ab.
-- Eingebettete Smart-Object-Texte werden von `inspect` angezeigt, aber nicht
-  innerhalb des Smart Objects bearbeitet. Explizite Rasterplatzhalter sind möglich.
-- Keine automatische Fotomontage, keine automatische Artboard-Einzelausgabe.
-  Die Ausgabe umfasst den gesamten Canvas.
+- Eingebettete Smart-Object-Texte werden von `inspect` angezeigt und können über
+  `smart_objects` ersetzt werden. Das Smart Object wird im Export rasterisiert;
+  der neue Text ist dann nicht als Photoshop-Textebene editierbar.
+- Kein Ersetzen von Fotos/Bild-Smart-Objects und keine automatische
+  Artboard-Einzelausgabe. Bildtausch mit kontrolliertem Einpassen/Vorschau und
+  separate Artboard-Ausgabe sind spätere Ausbaustufen. Die Ausgabe umfasst den
+  gesamten Canvas.
 
 Vor produktivem Einsatz jede neue Vorlage mit einem Referenzbild visuell prüfen.
 Für uneingeschränkte PSD-Kompatibilität und editierbare Texte ist eine andere
@@ -126,6 +130,41 @@ Sammlungen wird keine automatische Auswahl unterstützt; einzelne TTF/OTF nutzen
 `color` als Hexfarbe, `align` (`left`, `center`, `right`), `spacing`, `font`, `min_size`.
 Für Raster-/Smart-Object-Platzhalter sind `size`, `color`, `box` und eine Schrift
 notwendig; der gesamte Ziel-Layer wird ersetzt. Keine automatische Rekonstruktion.
+
+Für Texte in eingebetteten PSD-/PSB-Smart-Objects ordnet `smart_objects` ein
+logisches Feld allen angegebenen Formatvarianten zu. `inspect` zeigt den Pfad des
+äußeren Smart Objects sowie den Pfad der Textebene darin. Jedes Ziel muss explizit
+angegeben werden, damit gleich benannte Ebenen nicht versehentlich verwechselt werden:
+
+```json
+{
+  "template": "template.psd",
+  "output": "result.png",
+  "smart_objects": {
+    "headline": {
+      "text": "A new headline",
+      "size": 64,
+      "color": "#F4E84A",
+      "font": "fonts/Display-Bold.otf",
+      "align": "center",
+      "shrink": true,
+      "min_size": 38,
+      "targets": [
+        {"layer": "Artwork/Headline/Smart Object", "text_layer": "Canvas/Headline"},
+        {"layer": "Cover/Headline/Smart Object", "text_layer": "Canvas/Headline"}
+      ]
+    }
+  }
+}
+```
+
+Der Text und Stil gelten für alle Ziele; einzelne Ziele können Werte überschreiben.
+`size` und `box` verwenden Pixelkoordinaten des eingebetteten Dokuments. Die Box
+ist optional und nutzt sonst die bisherigen Textgrenzen. Zentrierung erfolgt
+horizontal und vertikal. Tracking, Kapitälchen und einige Photoshop-Sonderstile
+werden vereinfacht und als Warnung gemeldet. Gedrehte/perspektivische Smart Objects,
+externe Verknüpfungen sowie Masken und Effekte an den Ziel-Ebenen werden abgelehnt.
+Vor einer neuen Vorlagenfamilie erst `--dry-run` ausführen und das Ergebnis visuell prüfen.
 
 `format`: `png`, `jpg`, `jpeg`, `psd`; Standard ist die Dateiendung von `output`.
 `background`: JPG-Hintergrundfarbe. Fehlendes ICC-Profil wird nicht erfunden;

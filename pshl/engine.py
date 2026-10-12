@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import os
 import tempfile
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
@@ -181,7 +183,7 @@ def inspect_psd(path):
                 with so.open() as source:
                     nested = PSDImage.open(source)
                 row["embedded_texts"] = [
-                    {"path": p, "text": item.text}
+                    {"path": p, "text": item.text, "box": list(item.bbox)}
                     for p, item in walk(nested)
                     if item.kind == "type"
                 ]
@@ -235,8 +237,12 @@ def layout_text(text, box, style, shrink=False):
             if align not in {"left", "center", "right"}:
                 raise RenderError("align muss left, center oder right sein")
             x = {"left": 0, "center": (width - bw) / 2, "right": width - bw}[align]
+            valign = style.get("valign", "top")
+            if valign not in {"top", "center", "bottom"}:
+                raise RenderError("valign muss top, center oder bottom sein")
+            y = {"top": 0, "center": (height - bh) / 2, "bottom": height - bh}[valign]
             draw.multiline_text(
-                (x - bounds[0], -bounds[1]),
+                (x - bounds[0], y - bounds[1]),
                 block,
                 font=font,
                 fill=style["color"],
@@ -249,9 +255,172 @@ def layout_text(text, box, style, shrink=False):
     raise RenderError("Text passt nicht in die Box; shrink aktivieren oder Text kürzen")
 
 
+def _embedded_style(layer, override, font, fonts, shrink):
+    runs = [run for run in layer.typesetting.runs if run.text.strip()]
+    if not runs:
+        raise RenderError(f"Eingebettete Textebene ohne lesbare Formatdaten: {layer.name}")
+    source = runs[0].style
+    color = source.fill_color
+    if not color or len(color) != 4:
+        raise RenderError("Eingebettete Textebene benötigt eine RGB-Füllfarbe")
+    paragraphs = list(layer.typesetting)
+    alignments = {p.style.justification.name.lower() for p in paragraphs}
+    if len(alignments) > 1 or not alignments.issubset({"left", "right", "center"}):
+        raise RenderError("Gemischte Ausrichtung oder Blocksatz im Smartobjekt nicht unterstützt")
+    style = {
+        "font_name": source.font_name,
+        "size": source.font_size,
+        "color": tuple(round(c * 255) for c in (*color[1:], color[0])),
+        "align": "center",
+        "valign": "center",
+    }
+    style.update(override)
+    style.setdefault("min_size", max(6, round(float(style["size"]) * 0.6)))
+    style["font"] = font_file(style.get("font_name"), style.get("font") or font, fonts)
+    chosen = style["font"]
+    from fontTools.ttLib import TTFont
+
+    with TTFont(chosen, lazy=True) as selected_font:
+        cmap = selected_font.getBestCmap() or {}
+        missing = sorted({c for c in override["text"] if not c.isspace() and ord(c) not in cmap})
+        if missing:
+            raise RenderError(f"Schrift enthält diese Zeichen nicht: {''.join(missing)}")
+    color = style["color"]
+    style["color"] = ImageColor.getcolor(color, "RGBA") if isinstance(color, str) else tuple(color)
+    return style
+
+
+def _find_unique(all_layers, selector, kind):
+    matches = [
+        (path, layer) for path, layer in all_layers if path == selector or layer.name == selector
+    ]
+    if len(matches) != 1:
+        raise RenderError(f"Ebene {selector!r}: {len(matches)} Treffer; vollständigen Pfad angeben")
+    path, layer = matches[0]
+    if layer.kind != kind:
+        raise RenderError(f"Ebene {path!r} ist {layer.kind}, erwartet wurde {kind}")
+    return path, layer
+
+
+def _prepare_smart_objects(psd, specifications, font=None, fonts=None, shrink=False):
+    """Prepare text replacements inside embedded PSD/PSB smart objects."""
+    if not specifications:
+        return [], []
+    if not isinstance(specifications, dict):
+        raise RenderError("smart_objects muss ein Objekt aus logischen Feldern sein")
+    prepared, warnings, used = [], [], set()
+    outer_layers = list(walk(psd))
+    for field, spec in specifications.items():
+        if not isinstance(spec, dict) or not isinstance(spec.get("text"), str):
+            raise RenderError(f"smart_objects.{field} benötigt text als Zeichenfolge")
+        targets = spec.get("targets")
+        if not isinstance(targets, list) or not targets:
+            raise RenderError(f"smart_objects.{field}.targets muss mindestens ein Ziel enthalten")
+        for target in targets:
+            if (
+                not isinstance(target, dict)
+                or not target.get("layer")
+                or not target.get("text_layer")
+            ):
+                raise RenderError(f"smart_objects.{field}: jedes Ziel braucht layer und text_layer")
+            outer_path, outer = _find_unique(outer_layers, target["layer"], "smartobject")
+            if id(outer) in used:
+                raise RenderError(f"Smartobjekt mehrfach adressiert: {outer_path}")
+            used.add(id(outer))
+            if (
+                not outer.is_visible()
+                or outer.has_mask()
+                or outer.has_vector_mask()
+                or outer.has_effects()
+                or outer.clipping
+            ):
+                raise RenderError(
+                    f"Smartobjekt ist ausgeblendet oder hat nicht unterstützte Effekte: {outer_path}"
+                )
+            smart = outer.smart_object
+            if smart.kind != "data" or not smart.is_psd():
+                raise RenderError(
+                    f"Nur eingebettete PSD-/PSB-Smartobjekte werden unterstützt: {outer_path}"
+                )
+            nested = PSDImage.open(BytesIO(smart.data))
+            inner_path, inner = _find_unique(list(walk(nested)), target["text_layer"], "type")
+            if inner.has_mask() or inner.has_vector_mask() or inner.has_effects() or inner.clipping:
+                raise RenderError(f"Textebene hat Maske, Effekt oder Clipping: {inner_path}")
+            box = target.get("box", spec.get("box", inner.bbox))
+            if len(box) != 4 or not all(isinstance(value, int) for value in box):
+                raise RenderError("Smartobjekt-Box muss [links, oben, rechts, unten] enthalten")
+            left, top, right, bottom = box
+            if not (0 <= left < right <= nested.width and 0 <= top < bottom <= nested.height):
+                raise RenderError(
+                    f"Textbox liegt außerhalb des eingebetteten Dokuments: {inner_path}"
+                )
+            overrides = {
+                key: value for key, value in spec.items() if key not in {"text", "targets"}
+            }
+            overrides.update(
+                {
+                    key: value
+                    for key, value in target.items()
+                    if key not in {"layer", "text_layer", "box"}
+                }
+            )
+            overrides["text"] = spec["text"]
+            style = _embedded_style(inner, overrides, font, fonts, shrink)
+            do_shrink = target.get("shrink", spec.get("shrink", True))
+            image, size = layout_text(spec["text"], (right - left, bottom - top), style, do_shrink)
+            if size < round(style["size"]):
+                warnings.append(f"{field} / {outer_path}: Schrift auf {size}px verkleinert")
+            source_style = inner.typesetting.runs[0].style
+            if source_style.tracking or source_style.font_caps or source_style.baseline_shift:
+                warnings.append(
+                    f"{field} / {outer_path}: Tracking/Kapitälchen/Sonderformatierung werden vereinfacht"
+                )
+            parent, index = inner.parent, inner.parent.index(inner)
+            replacement = PixelLayer.frompil(image, parent, name=inner.name, left=left, top=top)
+            replacement.opacity = inner.opacity
+            replacement.blend_mode = inner.blend_mode
+            parent.remove(replacement)
+            parent[index] = replacement
+            rendered = nested.composite(apply_icc=False)
+            if rendered is None:
+                raise RenderError(
+                    f"Eingebettetes Smartobjekt lässt sich nicht rendern: {outer_path}"
+                )
+            rendered = rendered.convert("RGBA")
+            transform = smart._placed_layer.transform
+            xs, ys = transform[::2], transform[1::2]
+            if not (
+                math.isclose(xs[0], xs[3], abs_tol=0.02)
+                and math.isclose(xs[1], xs[2], abs_tol=0.02)
+                and math.isclose(ys[0], ys[1], abs_tol=0.02)
+                and math.isclose(ys[2], ys[3], abs_tol=0.02)
+                and xs[1] > xs[0]
+                and ys[2] > ys[0]
+            ):
+                raise RenderError(
+                    f"Gedrehte oder perspektivisch verzerrte Smartobjekt-Platzierung nicht unterstützt: {outer_path}"
+                )
+            width, height = round(xs[1] - xs[0]), round(ys[2] - ys[0])
+            if (
+                width < 1
+                or height < 1
+                or xs[0] < 0
+                or ys[0] < 0
+                or xs[1] > psd.width
+                or ys[2] > psd.height
+            ):
+                raise RenderError(f"Smartobjekt liegt außerhalb der Leinwand: {outer_path}")
+            rendered = rendered.resize((width, height), Image.Resampling.LANCZOS)
+            prepared.append((outer, rendered, round(xs[0]), round(ys[0])))
+            warnings.append(
+                f"{field} / {outer_path}: eingebetteter Text wurde im Ausgabe-Pixelbild ersetzt"
+            )
+    return prepared, warnings
+
+
 def prepare(psd, layers, styles, font=None, fonts=None, shrink=False):
-    if psd.color_mode != ColorMode.RGB or psd.depth != 8:
-        raise RenderError("Nur RGB-Vorlagen mit 8 Bit werden verlustfrei unterstützt")
+    if psd.color_mode != ColorMode.RGB or psd.depth not in {8, 16}:
+        raise RenderError("Nur RGB-Vorlagen mit 8 oder 16 Bit werden unterstützt")
     if not layers or not isinstance(layers, dict):
         raise RenderError("layers muss ein nicht-leeres Objekt sein")
     all_layers = list(walk(psd))
@@ -324,14 +493,29 @@ def render_job(job, dry_run=False):
         raise RenderError(f"Ausgabe existiert bereits: {target}")
     psd = PSDImage.open(source)
     info = metadata(psd)
-    prepared, warnings = prepare(
+    if not job.get("layers") and not job.get("smart_objects"):
+        raise RenderError("Auftrag benötigt layers oder smart_objects")
+    prepared, warnings = (
+        prepare(
+            psd,
+            job["layers"],
+            job.get("styles", {}),
+            job.get("font"),
+            job.get("fonts"),
+            job.get("shrink", False),
+        )
+        if job.get("layers")
+        else ([], [])
+    )
+    smart_prepared, smart_warnings = _prepare_smart_objects(
         psd,
-        job["layers"],
-        job.get("styles", {}),
+        job.get("smart_objects", {}),
         job.get("font"),
         job.get("fonts"),
         job.get("shrink", False),
     )
+    prepared.extend(smart_prepared)
+    warnings.extend(smart_warnings)
     if fmt == "psd":
         warnings.append("PSD-Ausgabe: ersetzte Texte sind Pixelebenen, keine editierbaren Texte")
     if dry_run:
