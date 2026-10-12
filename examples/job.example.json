@@ -1,0 +1,8 @@
+{
+  "template": "template.psd",
+  "output": "result.png",
+  "layers": {"Card/Content/Title": "Ein neuer Anfang"},
+  "font": "fonts/font.ttf",
+  "shrink": true,
+  "styles": {"Card/Content/Title": {"box": [15, 20, 225, 70], "min_size": 10}}
+}

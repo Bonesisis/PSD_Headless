@@ -1,0 +1,3 @@
+include LICENSE README.md AGENTS.md CHANGELOG.md
+recursive-include pshl/static *.html *.css *.js
+recursive-include tests *.py *.ps1

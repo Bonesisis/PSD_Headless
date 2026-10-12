@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PSD Headless</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
+<body><header><a href="/">PSD Headless<span>1.0</span></a><span class="local">Lokale Verarbeitung</span></header>
+<main><div class="intro"><p class="eyebrow">DEIN PSD-WORKFLOW</p><h1>Vorlagen. Texte. Fertig.</h1><p>Texte austauschen, Vorlagen rendern — ohne Photoshop.</p></div>
+<div class="workspace"><section class="panel"><h2>Auftrag einrichten</h2><p class="hint">Alle Pfade beziehen sich auf den Rechner, auf dem der Server läuft.</p>
+<form id="form"><div class="twocol"><label>Vorlagenordner<input id="templates" required placeholder="C:\Vorlagen"></label><label>Ausgabeordner<input id="output" required placeholder="C:\Ergebnisse"></label></div>
+<label>Schriftdatei <span class="muted">(optional, innerhalb des Vorlagenordners)</span><input id="font" placeholder="fonts/meine-schrift.ttf"></label>
+<div class="twocol"><label>Job-Datei<input id="file" type="file" accept=".json,.yaml,.yml,.csv"></label><label>Worker<input id="workers" type="number" min="1" max="32" value="1" required></label></div>
+<label id="key-label" hidden>API-Schlüssel<input id="key" type="password" autocomplete="off"></label>
+<label>Aufträge <span class="muted" id="format">JSON</span><textarea id="jobs" spellcheck="false" rows="11">[
+  {
+    "template": "vorlage.psd",
+    "output": "ergebnis.png",
+    "layers": { "Titel": "Ein neuer Anfang" },
+    "shrink": true
+  }
+]</textarea></label>
+<p class="hint">Vorhandene Ausgaben werden niemals überschrieben. PSD-Exporte enthalten geänderte Texte als Pixelebenen.</p>
+<div class="actions"><button type="submit" id="start">Batch starten <span aria-hidden="true">→</span></button><button type="button" id="dry" class="secondary">Nur prüfen</button></div></form></section>
+<section class="panel monitor" aria-live="polite"><h2>Verarbeitung</h2><div class="statusrow"><span>Status</span><span id="status" class="badge">Bereit</span></div><div class="progresslabel"><label for="progress">Fortschritt</label><span id="count">0 / 0</span></div><progress id="progress" max="1" value="0"></progress><p id="message" class="hint">Noch kein Batch gestartet.</p><pre id="events">Hier erscheinen die Ergebnisse deiner Aufträge.</pre><button id="report" class="secondary" disabled>Report herunterladen ↓</button><p class="hint">Das Original bleibt unverändert.<br>Ergebnisse und Report liegen im Ausgabeordner.</p></section></div>
+<footer>PSD Headless · Ein Projekt von Luca-Gene Bonzel · MIT-Lizenz</footer></main></body></html>

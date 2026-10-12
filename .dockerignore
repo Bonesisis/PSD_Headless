@@ -1,0 +1,8 @@
+**
+!pyproject.toml
+!README.md
+!LICENSE
+!pshl/
+!pshl/**
+pshl/**/__pycache__
+pshl/**/*.pyc

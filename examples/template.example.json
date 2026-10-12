@@ -1,0 +1,22 @@
+{
+  "text_fields": {
+    "headline": {
+      "layer_name": "TEXT_HEADLINE",
+      "color": "#ffffff",
+      "max_lines": 2,
+      "uppercase": true,
+      "max_length": 120
+    },
+    "subtitle": {
+      "layer_name": "TEXT_SUBTITLE",
+      "color": "#f2b84b",
+      "max_lines": 3,
+      "uppercase": false,
+      "max_length": 400
+    }
+  },
+  "artboards": {
+    "Square": "square.png",
+    "Landscape": "landscape.png"
+  }
+}

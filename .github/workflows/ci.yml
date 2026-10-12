@@ -1,0 +1,48 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+      - run: python -m pytest -q
+      - run: python -m build
+      - name: PowerShell entry points and UNC integration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./setup_windows.ps1
+          ./.venv/Scripts/python.exe -m pshl --version
+          ./tests/windows_unc.ps1
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t psd-headless:test .
+      - run: docker run --rm psd-headless:test python -m pshl --version
+      - name: Authenticated server smoke test
+        run: |
+          docker run -d --name psd-test -p 127.0.0.1:8000:8000 -e PSHL_API_KEY=ci-only-smoke-key psd-headless:test
+          for i in $(seq 1 30); do curl --fail http://127.0.0.1:8000/health && break; sleep 1; done
+          curl --fail http://127.0.0.1:8000/health
+          curl --fail http://127.0.0.1:8000/ > /dev/null
+      - if: always()
+        run: docker logs psd-test; docker rm -f psd-test

@@ -1,0 +1,23 @@
+services:
+  psd-headless:
+    build: .
+    image: ghcr.io/bonesisis/psd_headless:1.0.0
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      PSHL_API_KEY: "${PSHL_API_KEY:?Set a random PSHL_API_KEY in .env}"
+      PSHL_ALLOWED_HOSTS: "${PSHL_ALLOWED_HOSTS:-}"
+    volumes:
+      - type: bind
+        source: "${PSHL_TEMPLATE_DIR:-./assets/templates}"
+        target: /templates
+        read_only: true
+      - type: bind
+        source: "${PSHL_OUTPUT_DIR:-./out}"
+        target: /output
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped

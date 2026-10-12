@@ -1,0 +1,22 @@
+# Changelog
+
+## 1.0.0 — 2026-10-12
+
+- Added recursive text-layer inspection and strict RGB8 text rendering.
+- Added JSON/YAML/CSV batches, per-job error isolation, bounded process workers,
+  dry-run validation, JSON reports and overwrite protection.
+- Added PNG/JPG/PSD export with DPI/ICC preservation; replacement PSD text is rasterized.
+- Added a local dashboard with directory inputs, progress and report downloads.
+- Added authenticated background API, root containment and origin/host checks.
+- Added PowerShell and shell entry points, UNC handling and platform CI.
+- Added synthetic PSD/font integration fixtures and 110-job batch regression tests.
+- Added Docker publishing, Pages documentation and agent development guidance.
+- Replaced the former private-use license with MIT, copyright Luca-Gene Bonzel.
+
+### Compatibility and limits
+
+- CLI/API schemas changed from the experimental 0.x interface. Use job files and
+  `/api/batches`; old Python helper APIs remain experimental.
+- Not a Photoshop-equivalent renderer. Paragraph text requires explicit box bounds;
+  mixed/complex text styles are rejected, and replaced text is rasterized in PSD.
+- Docker Desktop on a Windows host requires a separate manual validation.
