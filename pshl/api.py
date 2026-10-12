@@ -216,6 +216,7 @@ def create_app(template_root=None, output_root=None, font=None, state_root=None)
             with lock:
                 state = states[batch_id]
                 state["done"] = done
+                state["total"] = total
                 state["events"] = (state["events"] + [result])[-50:]
 
         def work():
@@ -232,7 +233,12 @@ def create_app(template_root=None, output_root=None, font=None, state_root=None)
                     restricted=True,
                 )
                 with lock:
-                    states[batch_id].update(status="finished", done=len(jobs), report=report)
+                    states[batch_id].update(
+                        status="finished",
+                        done=report["total"],
+                        total=report["total"],
+                        report=report,
+                    )
             except Exception as exc:
                 with lock:
                     states[batch_id].update(status="error", error=str(exc))

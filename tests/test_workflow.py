@@ -11,7 +11,7 @@ from psd_tools.psd.descriptor import Descriptor, DescriptorBlock, Double
 from psd_tools.psd.tagged_blocks import TaggedBlock
 
 from pshl.engine import render_job
-from pshl.jobs import run_batch
+from pshl.jobs import parse_jobs, run_batch
 from pshl.profiles import expand_profile
 from pshl.queue import ReviewQueue, digest
 from tests.fixtures import fixture
@@ -243,3 +243,22 @@ def test_running_preview_resumes_after_restart(tmp_path):
     restarted = ReviewQueue(tmp_path / "state")
     assert restarted.tick()
     assert restarted.get(state["id"])["status"] == "review"
+
+
+def test_csv_image_and_profile_fields():
+    import csv
+    import io
+
+    content = io.StringIO()
+    writer = csv.DictWriter(content, fieldnames=["profile", "fields", "images"])
+    writer.writeheader()
+    writer.writerow(
+        {
+            "profile": "example.json",
+            "fields": json.dumps({"title": "Hello"}),
+            "images": json.dumps({"photo": "photo.jpg"}),
+        }
+    )
+    job = parse_jobs(content.getvalue(), ".csv")[0]
+    assert job["fields"] == {"title": "Hello"}
+    assert job["images"] == {"photo": "photo.jpg"}

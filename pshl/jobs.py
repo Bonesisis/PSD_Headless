@@ -22,8 +22,12 @@ def parse_jobs(raw, extension=".json"):
         jobs = []
         for row in csv.DictReader(io.StringIO(raw)):
             try:
-                row["layers"] = json.loads(row["layers"])
-                for field in ("styles", "fonts", "smart_objects"):
+                if not any(
+                    row.get(key) for key in ("layers", "smart_objects", "images", "profile")
+                ):
+                    raise ValueError("CSV row needs layers, smart_objects, images or profile")
+                row["layers"] = json.loads(row.get("layers") or "{}")
+                for field in ("styles", "fonts", "smart_objects", "images", "fields"):
                     if row.get(field):
                         row[field] = json.loads(row[field])
                     else:
