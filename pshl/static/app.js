@@ -8,6 +8,24 @@ async function api(path, options = {}) {
   return data;
 }
 function setBusy(value) { busy = value; $('start').disabled = value; $('dry').disabled = value; }
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-help]');
+  document.querySelectorAll('[data-help]').forEach(item => {
+    const open = item === button && item.getAttribute('aria-expanded') !== 'true';
+    item.setAttribute('aria-expanded', String(open));
+    const text = document.getElementById(item.dataset.help);
+    if (text) text.hidden = !open;
+  });
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    document.querySelectorAll('[data-help][aria-expanded="true"]').forEach(item => {
+      item.setAttribute('aria-expanded', 'false');
+      const text = document.getElementById(item.dataset.help);
+      if (text) text.hidden = true;
+    });
+  }
+});
 fetch('/api/config').then(r => r.json()).then(c => {
   $('templates').value = c.templates; $('output').value = c.output; token = c.token || '';
   $('key-label').hidden = Boolean(c.token);
