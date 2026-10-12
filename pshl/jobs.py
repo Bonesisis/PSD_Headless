@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from .engine import RenderError, render_job
+from .profiles import expand_profile
 
 
 def parse_jobs(raw, extension=".json"):
@@ -67,6 +68,12 @@ def normalize(job, template_root, output_root, font=None, restricted=False):
         if restricted and not path.is_relative_to(Path(root).resolve()):
             raise RenderError(f"{key}: Pfad verlässt den konfigurierten Ordner")
         job[key] = str(path)
+    job["images"] = {k: dict(v) for k, v in job.get("images", {}).items()}
+    for spec in job["images"].values():
+        path = resolve_path(spec.get("source"), template_root)
+        if restricted and not path.is_relative_to(Path(template_root).resolve()):
+            raise RenderError("Bilddatei muss im Vorlagenordner liegen")
+        spec["source"] = str(path)
     if job.get("font") or font:
         job["font"] = str(resolve_path(job.get("font") or font, template_root))
     job["fonts"] = {k: str(resolve_path(v, template_root)) for k, v in job.get("fonts", {}).items()}
@@ -121,6 +128,13 @@ def run_batch(
         raise RenderError("workers muss zwischen 1 und 32 liegen")
     if not jobs:
         raise RenderError("Batch ist leer")
+    expanded = []
+    for raw in jobs:
+        try:
+            expanded.extend(expand_profile(raw, template_root, restricted))
+        except Exception as exc:
+            expanded.append({"_error": str(exc)})
+    jobs = expanded
     results, ready, sources, destinations = {}, [], set(), {}
     started = time.monotonic()
     for i, raw in enumerate(jobs):

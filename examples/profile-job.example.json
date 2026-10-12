@@ -1,0 +1,5 @@
+{
+  "profile": "profiles/example.json",
+  "name": "episode",
+  "fields": {"title": "An example title", "date": "2026-12-01"}
+}

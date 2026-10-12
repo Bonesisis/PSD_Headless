@@ -36,3 +36,6 @@ build/
 dist/
 site/
 .qa/
+.pshl-state/
+*.sqlite3
+*.sqlite3-*

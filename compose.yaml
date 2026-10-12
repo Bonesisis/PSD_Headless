@@ -8,6 +8,7 @@ services:
       PSHL_API_KEY: "${PSHL_API_KEY:?Set a random PSHL_API_KEY in .env}"
       PSHL_ALLOWED_HOSTS: "${PSHL_ALLOWED_HOSTS:-}"
     volumes:
+      - queue-state:/home/renderer/.pshl-state
       - type: bind
         source: "${PSHL_TEMPLATE_DIR:-./assets/templates}"
         target: /templates
@@ -21,3 +22,5 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
+volumes:
+  queue-state:

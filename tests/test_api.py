@@ -47,3 +47,33 @@ def test_network_key_locks_roots(tmp_path, monkeypatch):
         )
         assert response.status_code == 400
         assert client.get("/health", headers={"Host": "untrusted.example"}).status_code == 400
+
+
+def test_queue_api_review_images_and_rejection(tmp_path):
+    job, _ = fixture(tmp_path)
+    with TestClient(
+        create_app(str(tmp_path), str(tmp_path), state_root=tmp_path / "state")
+    ) as client:
+        token = client.get("/api/config").json()["token"]
+        headers = {"X-PSHL-Token": token}
+        assert client.post("/api/queue", json={"jobs": [job]}).status_code == 401
+        response = client.post("/api/queue", json={"jobs": [job]}, headers=headers)
+        assert response.status_code == 202, response.text
+        endpoint = "/api/queue/" + response.json()["id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            state = client.get(endpoint, headers=headers).json()
+            if state["status"] == "review":
+                break
+            time.sleep(0.05)
+        assert state["status"] == "review", state
+        assert client.get(endpoint + "/images/0/preview", headers=headers).status_code == 200
+        assert client.get(endpoint + "/images/-1/preview", headers=headers).status_code == 404
+        assert client.get(endpoint + "/images/0/preview").status_code == 401
+        assert (
+            client.post(
+                endpoint + "/reject", json={"reason": "Wrong crop"}, headers=headers
+            ).json()["status"]
+            == "rejected"
+        )
+        assert client.get(endpoint, headers=headers).json()["reason"] == "Wrong crop"

@@ -29,10 +29,11 @@ Die Engine verwendet psd-tools und Pillow, nicht die Photoshop-Rendering-Engine.
 - Eingebettete Smart-Object-Texte werden von `inspect` angezeigt und können über
   `smart_objects` ersetzt werden. Das Smart Object wird im Export rasterisiert;
   der neue Text ist dann nicht als Photoshop-Textebene editierbar.
-- Kein Ersetzen von Fotos/Bild-Smart-Objects und keine automatische
-  Artboard-Einzelausgabe. Bildtausch mit kontrolliertem Einpassen/Vorschau und
-  separate Artboard-Ausgabe sind spätere Ausbaustufen. Die Ausgabe umfasst den
-  gesamten Canvas.
+- Einzelne sichtbare Artboards können über `artboard` in ihren nativen Maßen
+  exportiert werden. Ohne Auswahl wird der gesamte Canvas ausgegeben.
+- Explizit ausgewählte rechteckige Pixel-/Bild-Smartobjekte können mit `images`
+  ersetzt werden (Cover-Crop, kontrollierter Fokus). Masken, Effekte und gedrehte
+  oder verzerrte Bild-Smartobjekte werden abgelehnt; keine automatische Zielsuche.
 
 Vor produktivem Einsatz jede neue Vorlage mit einem Referenzbild visuell prüfen.
 Für uneingeschränkte PSD-Kompatibilität und editierbare Texte ist eine andere
@@ -83,16 +84,97 @@ installieren. Für reine Laufzeitinstallationen genügt `python -m pip install .
 Nach dem Serverstart [http://127.0.0.1:8000](http://127.0.0.1:8000) öffnen.
 Vorlagenordner und Ausgabeordner eintragen, optional eine Schriftdatei im
 Vorlagenordner angeben, eine JSON/YAML/CSV-Datei laden oder JSON direkt bearbeiten.
-`Nur prüfen` validiert ohne Bildausgabe; `Batch starten` verarbeitet die Aufträge.
-Der Status zeigt erledigte Aufträge, Fehler und Warnungen. Der JSON-Report wird
-im Ausgabeordner gespeichert und kann zusätzlich heruntergeladen werden.
+`Nur prüfen` validiert ohne Bildausgabe. `Vorschauen erstellen` legt einen
+dauerhaften Auftrag an. Alle Ausgabeformate sind im Vorher/Nachher-Auswahlfeld
+prüfbar. `Gut – freigeben` veröffentlicht genau die geprüften Bilddateien;
+`Nicht gut – stoppen` hält den Auftrag an und speichert die Begründung im Report.
+Der Report kann für die externe Fehleranalyse als JSON heruntergeladen werden.
 
 Ordner werden als Pfade eingegeben, nicht im lokalen Dateiauswahldialog gewählt:
 gemeint ist immer das Dateisystem **des Servers**, nicht das des Browsers.
-Der Server verarbeitet einen Batch gleichzeitig. Die letzten 20 Batch-Status bleiben
-bis zum Neustart verfügbar; Reports auf dem Datenträger bleiben erhalten.
-Beim Schließen des Browsers läuft der Server weiter. Es gibt keine persistente
-Job-Warteschlange, Pause/Fortsetzen oder automatische Wiederholung nach Serverabsturz.
+Die Vorschauwarteschlange verarbeitet einen Auftrag nach dem anderen und bleibt
+in `PSHL_STATE_DIR` gespeichert. Der Statusordner muss lokal liegen, nicht auf NAS.
+Beim Schließen des Browsers läuft der Server weiter. Nach einem Absturz setzt der
+Worker offene Arbeit fort. Erfolgreiche Vorschauen werden beim Retry wiederverwendet.
+Die ältere direkte Batch-API bleibt für explizite Verarbeitung ohne Freigabeschritt
+verfügbar; deren letzten 20 Status liegen weiterhin nur im Arbeitsspeicher.
+
+## Profile, Freigabe und Zeitpläne
+
+Ein Profil ist JSON oder YAML mit `version: 1`, `template`, `defaults`, `fields`
+und `exports`. [Profilbeispiel](examples/profile.example.json) und
+[Auftrag](examples/profile-job.example.json) zeigen die Struktur. Kopiere das Profil
+in deinen Vorlagenordner, passe Pfade anhand von `inspect` an und hinterlege deine
+lokalen Schriften. Es werden keine echten Vorlagen mitgeliefert.
+Relative Pfade im Profil gelten ab dem Vorlagenordner, nicht ab dem Profilordner.
+Ein Feld kann mehrere direkte `layers` oder mehrere `smart_objects`-Ziele ansprechen.
+Jeder `exports`-Eintrag erzeugt einen PNG/JPEG-Auftrag, optional für ein bestimmtes
+Artboard. Alle definierten Felder sind Pflicht; unbekannte Felder sind Fehler.
+
+```sh
+python -m pshl queue submit --jobs examples/profile-job.example.json --templates ./templates --output ./out
+python -m pshl queue work
+```
+
+Alternativ startet `python -m pshl serve` den Worker mit der Webseite.
+Browser und Terminal müssen denselben absoluten `PSHL_STATE_DIR` verwenden.
+Die KI kann Aufträge vollständig per CLI vorbereiten; es ist kein offener Browser
+nötig. Freigabe nach visueller Prüfung im Browser oder ausdrücklich per CLI:
+
+```sh
+python -m pshl queue list
+python -m pshl queue status AUFTRAGS_ID
+python -m pshl queue approve AUFTRAGS_ID
+python -m pshl queue reject AUFTRAGS_ID --reason "Ausschnitt korrigieren"
+python -m pshl queue retry AUFTRAGS_ID
+```
+
+Zeitpläne sind ebenfalls per CLI oder Oberfläche einreichbar:
+
+```sh
+python -m pshl queue submit --jobs examples/profile-job.example.json --templates ./templates --output ./out --at 2026-12-01T10:00:00+01:00 --every-days 7 --date-field date
+```
+
+Die Vorschau entsteht sofort. Erst nach Freigabe **und** Erreichen des Termins
+wird ausgegeben. Wiederholungen erhöhen die benannten ISO-Datumsfelder
+(`YYYY-MM-DD`) um `every_days`; Dateinamen müssen diese Felder enthalten, damit
+Folgeausgaben nicht kollidieren. `queue approve ID --series` bzw. die Checkbox
+erteilt auch Folgeläufen die Freigabe; ohne diese Option wird jeder Lauf geprüft.
+Veränderte Vorlagen, Profile oder explizite Bild-/Fontdateien stoppen eine Serie.
+Installierte automatisch gefundene Fonts sind nicht Teil dieser Dateiprüfung:
+für reproduzierbare Serien immer explizite Fontdateien verwenden.
+
+**Zeitgrenzen:** Startzeit mit UTC-Offset erforderlich; Wiederholungen folgen
+festen 24-Stunden-Tagen, nicht automatisch der Sommerzeit. Der Worker muss laufen;
+verpasste Termine werden der Reihe nach nachgeholt, nicht übersprungen. Ablehnen
+des nächsten Serienauftrags beendet die weitere Folge. Keine Hintergrundinstallation
+als Betriebssystemdienst und keine automatische Datei-/Ordnerüberwachung.
+
+**Sicherheit und Wiederanlauf:** Identische Aufträge werden anhand Inhalt und
+Eingabedatei-Hashes erkannt. Vorschauen werden mit SHA-256 geprüft. Geänderte
+Freigaben werden nicht still neu gerendert. Keine Überschreibung bestehender Dateien.
+Bei einem NAS-Abbruch kann eine Teilkopie im Ziel liegen; der Retry meldet diese
+als Kollision. Nach Prüfung die Teilkopie manuell verschieben und erneut versuchen.
+Die Ausgabe mehrerer Dateien ist keine atomare Gesamttransaktion. Der lokale
+Statusordner enthält sensible Aufträge und Vorschauen: Zugriff einschränken,
+sichern und nur ohne laufenden Worker verwalten. Keine automatische Bereinigung.
+
+Die QA meldet Layoutfehler, Schriftverkleinerung und unveränderte Bilder. Sie ist
+kein Photoshop-Vergleich und erkennt nicht jede abgeschnittene Glyphe oder
+gestalterisch zu kleine Schrift. Neue Vorlagen immer visuell kontrollieren.
+
+### Bild ersetzen
+
+Ein direkter Auftrag kann beispielsweise enthalten:
+
+```json
+{"template":"template.psd","output":"photo.png","images":{"Artwork/Photo":{"source":"photos/new.jpg","fit":"cover","focus":[0.5,0.3]}}}
+```
+
+`focus` liegt zwischen 0 und 1 (links/oben bis rechts/unten) und positioniert den
+Cover-Ausschnitt. Eingabebilder werden gemäß EXIF orientiert und bei vorhandenem
+Vorlagenprofil farbkonvertiert; unprofilierte Bilder gelten als sRGB. Das Bildziel
+wird rasterisiert. Externe Smartobjekt-Verknüpfungen werden nicht geladen.
 
 ## CLI und Job-Dateien
 
@@ -239,6 +321,16 @@ Jeder Batch-/Report-Zugriff benötigt den Header `X-PSHL-Token`.
 Lokal liefert `/api/config` einen zufälligen Sitzungstoken; die UI verwendet ihn.
 Beispiel-Payload: `{ "jobs": [...], "workers": 2, "dry_run": false }`.
 Alternativ `content` und `extension` für eine komplette Job-Datei.
+
+Dauerhafter Freigabeworkflow (ebenfalls authentifiziert): `POST /api/queue` nimmt
+denselben Job-Inhalt sowie optional `schedule: {at, every_days, date_fields}` an.
+`GET /api/queue` listet Aufträge; `GET /api/queue/{id}` liefert Status und Report.
+`POST /api/queue/{id}/approve`, `/reject`, `/retry` mit JSON-Body
+`{"reason":"...","series":false}` steuern Freigabe und Wiederholung.
+`GET /api/queue/{id}/images/{index}/before` bzw. `/preview` liefert Vorschauen.
+Freigaben können während eines aktiven Renderlaufs vorübergehend abgelehnt werden;
+nach Abschluss erneut versuchen. Die direkte `/api/batches`-API umgeht bewusst
+die Vorschaufreigabe und ist nur für ausdrücklich gewünschte Direktläufe gedacht.
 
 Netzwerkbetrieb erfordert `PSHL_API_KEY` (zufälliges Secret), explizite
 `PSHL_ALLOWED_HOSTS`, TLS-Reverse-Proxy und Zugriffskontrolle. Bei gesetztem API-Key

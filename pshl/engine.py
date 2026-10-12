@@ -308,7 +308,7 @@ def _prepare_smart_objects(psd, specifications, font=None, fonts=None, shrink=Fa
         return [], []
     if not isinstance(specifications, dict):
         raise RenderError("smart_objects muss ein Objekt aus logischen Feldern sein")
-    prepared, warnings, used = [], [], set()
+    prepared, warnings, used, nested_cache = {}, [], set(), {}
     outer_layers = list(walk(psd))
     for field, spec in specifications.items():
         if not isinstance(spec, dict) or not isinstance(spec.get("text"), str):
@@ -324,9 +324,6 @@ def _prepare_smart_objects(psd, specifications, font=None, fonts=None, shrink=Fa
             ):
                 raise RenderError(f"smart_objects.{field}: jedes Ziel braucht layer und text_layer")
             outer_path, outer = _find_unique(outer_layers, target["layer"], "smartobject")
-            if id(outer) in used:
-                raise RenderError(f"Smartobjekt mehrfach adressiert: {outer_path}")
-            used.add(id(outer))
             if (
                 not outer.is_visible()
                 or outer.has_mask()
@@ -342,8 +339,15 @@ def _prepare_smart_objects(psd, specifications, font=None, fonts=None, shrink=Fa
                 raise RenderError(
                     f"Nur eingebettete PSD-/PSB-Smartobjekte werden unterstützt: {outer_path}"
                 )
-            nested = PSDImage.open(BytesIO(smart.data))
-            inner_path, inner = _find_unique(list(walk(nested)), target["text_layer"], "type")
+            if id(outer) not in nested_cache:
+                nested = PSDImage.open(BytesIO(smart.data))
+                nested_cache[id(outer)] = (nested, list(walk(nested)))
+            nested, inner_layers = nested_cache[id(outer)]
+            inner_path, inner = _find_unique(inner_layers, target["text_layer"], "type")
+            key = (id(outer), inner_path)
+            if key in used:
+                raise RenderError(f"Textebene mehrfach adressiert: {outer_path}/{inner_path}")
+            used.add(key)
             if inner.has_mask() or inner.has_vector_mask() or inner.has_effects() or inner.clipping:
                 raise RenderError(f"Textebene hat Maske, Effekt oder Clipping: {inner_path}")
             box = target.get("box", spec.get("box", inner.bbox))
@@ -411,11 +415,11 @@ def _prepare_smart_objects(psd, specifications, font=None, fonts=None, shrink=Fa
             ):
                 raise RenderError(f"Smartobjekt liegt außerhalb der Leinwand: {outer_path}")
             rendered = rendered.resize((width, height), Image.Resampling.LANCZOS)
-            prepared.append((outer, rendered, round(xs[0]), round(ys[0])))
+            prepared[id(outer)] = (outer, rendered, round(xs[0]), round(ys[0]))
             warnings.append(
                 f"{field} / {outer_path}: eingebetteter Text wurde im Ausgabe-Pixelbild ersetzt"
             )
-    return prepared, warnings
+    return list(prepared.values()), warnings
 
 
 def prepare(psd, layers, styles, font=None, fonts=None, shrink=False):
@@ -482,6 +486,63 @@ def prepare(psd, layers, styles, font=None, fonts=None, shrink=False):
     return prepared, warnings
 
 
+def _prepare_images(psd, specifications):
+    """Replace explicitly selected rectangular picture areas; never follow links."""
+    from PIL import ImageCms, ImageOps
+
+    prepared = []
+    for selector, spec in specifications.items():
+        matches = [layer for path, layer in walk(psd) if path == selector or layer.name == selector]
+        if len(matches) != 1:
+            raise RenderError(f"Bildziel {selector!r}: {len(matches)} Treffer")
+        layer = matches[0]
+        if layer.kind not in {"pixel", "smartobject"} or not layer.is_visible():
+            raise RenderError("Bildziel muss eine sichtbare Pixel- oder Smartobjektebene sein")
+        if layer.has_mask() or layer.has_vector_mask() or layer.has_effects() or layer.clipping:
+            raise RenderError("Bildziele mit Masken, Effekten oder Schnittmasken nicht unterstützt")
+        if layer.kind == "smartobject":
+            placed = layer.smart_object._placed_layer
+            if placed is None:
+                raise RenderError("Smartobjekt ohne überprüfbare Platzierung")
+            x1, y1, x2, y2, x3, y3, x4, y4 = placed.transform
+            if not (x1 == x4 and x2 == x3 and y1 == y2 and y3 == y4 and x2 > x1 and y3 > y1):
+                raise RenderError("Gedrehte oder verzerrte Bild-Smartobjekte nicht unterstützt")
+            box = tuple(round(v) for v in (x1, y1, x3, y3))
+        else:
+            box = layer.bbox
+        left, top, right, bottom = box
+        if right <= left or bottom <= top:
+            raise RenderError("Bildbereich ist leer")
+        focus = spec.get("focus", [0.5, 0.5])
+        if len(focus) != 2 or not all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in focus):
+            raise RenderError("focus benötigt zwei Werte zwischen 0 und 1")
+        if spec.get("fit", "cover") != "cover":
+            raise RenderError("Bildersetzung unterstützt derzeit nur fit: cover")
+        with Image.open(spec["source"]) as original:
+            image = ImageOps.exif_transpose(original).convert("RGBA")
+            source_profile = original.info.get("icc_profile")
+        target_profile = metadata(psd)["icc_profile"]
+        if target_profile:
+            source_profile = (
+                ImageCms.ImageCmsProfile(BytesIO(source_profile))
+                if source_profile
+                else ImageCms.createProfile("sRGB")
+            )
+            alpha = image.getchannel("A")
+            image = ImageCms.profileToProfile(
+                image.convert("RGB"),
+                source_profile,
+                ImageCms.ImageCmsProfile(BytesIO(target_profile)),
+                outputMode="RGB",
+            )
+            image.putalpha(alpha)
+        image = ImageOps.fit(
+            image, (right - left, bottom - top), Image.Resampling.LANCZOS, centering=tuple(focus)
+        )
+        prepared.append((layer, image, left, top))
+    return prepared
+
+
 def render_job(job, dry_run=False):
     source, target = Path(job["template"]), Path(job["output"])
     if source.resolve() == target.resolve():
@@ -492,9 +553,16 @@ def render_job(job, dry_run=False):
     if target.exists():
         raise RenderError(f"Ausgabe existiert bereits: {target}")
     psd = PSDImage.open(source)
+    if psd.color_mode != ColorMode.RGB or psd.depth not in {8, 16}:
+        raise RenderError("Nur RGB-Vorlagen mit 8 oder 16 Bit werden unterstützt")
     info = metadata(psd)
-    if not job.get("layers") and not job.get("smart_objects"):
-        raise RenderError("Auftrag benötigt layers oder smart_objects")
+    artboard = None
+    if job.get("artboard"):
+        _, artboard = _find_unique(list(walk(psd)), job["artboard"], "artboard")
+        if fmt == "psd" or not artboard.is_visible():
+            raise RenderError("Artboard-Export benötigt PNG/JPEG und ein sichtbares Artboard")
+    if not job.get("layers") and not job.get("smart_objects") and not job.get("images"):
+        raise RenderError("Auftrag benötigt layers, smart_objects oder images")
     prepared, warnings = (
         prepare(
             psd,
@@ -515,6 +583,9 @@ def render_job(job, dry_run=False):
         job.get("shrink", False),
     )
     prepared.extend(smart_prepared)
+    prepared.extend(_prepare_images(psd, job.get("images", {})))
+    if len({id(item[0]) for item in prepared}) != len(prepared):
+        raise RenderError("Eine Ebene darf pro Auftrag nur einmal ersetzt werden")
     warnings.extend(smart_warnings)
     if fmt == "psd":
         warnings.append("PSD-Ausgabe: ersetzte Texte sind Pixelebenen, keine editierbaren Texte")
@@ -537,7 +608,7 @@ def render_job(job, dry_run=False):
             psd.save(temp)
         else:
             # apply_icc=False: Original-RGB-Werte behalten, Originalprofil anhängen.
-            image = psd.composite(apply_icc=False).convert("RGBA")
+            image = (artboard or psd).composite(apply_icc=False).convert("RGBA")
             options = {"dpi": info["dpi"]}
             if info["icc_profile"]:
                 options["icc_profile"] = info["icc_profile"]

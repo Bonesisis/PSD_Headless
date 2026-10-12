@@ -10,6 +10,9 @@ source = source.replace(
     "(AGENTS.md)", "(https://github.com/Bonesisis/PSD_Headless/blob/main/AGENTS.md)"
 )
 body = markdown.markdown(source, extensions=["fenced_code", "tables", "toc"])
+body = body.replace(
+    'href="examples/', 'href="https://github.com/Bonesisis/PSD_Headless/blob/main/examples/'
+)
 page = (
     """<!doctype html><html lang="de"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>PSD Headless · Dokumentation</title>

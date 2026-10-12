@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .jobs import parse_jobs, run_batch
+from .queue import ReviewQueue
 
 
 class BatchRequest(BaseModel):
@@ -29,9 +30,10 @@ class BatchRequest(BaseModel):
     font: str | None = None
     workers: int = Field(default=1, ge=1, le=32)
     dry_run: bool = False
+    schedule: dict | None = None
 
 
-def create_app(template_root=None, output_root=None, font=None):
+def create_app(template_root=None, output_root=None, font=None, state_root=None):
     template_root = str(Path(template_root or os.getenv("PSHL_TEMPLATE_DIR", ".")).resolve())
     output_root = str(Path(output_root or os.getenv("PSHL_OUTPUT_DIR", "out")).resolve())
     api_key = os.getenv("PSHL_API_KEY", "")
@@ -39,10 +41,31 @@ def create_app(template_root=None, output_root=None, font=None):
     executor = ThreadPoolExecutor(max_workers=1)
     lock, states = threading.Lock(), {}
     max_bytes = 5 * 1024 * 1024
+    queue = ReviewQueue(state_root or os.getenv("PSHL_STATE_DIR", ".pshl-state"))
+    stop = asyncio.Event()
+
+    async def queue_worker():
+        while not stop.is_set():
+            try:
+                worked = await asyncio.to_thread(queue.tick)
+            except Exception:
+                # Keep the service alive on transient disk errors; persisted jobs remain retryable.
+                import logging
+
+                logging.getLogger(__name__).exception("Queue worker failed")
+                worked = False
+            if not worked:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=1)
+                except TimeoutError:
+                    pass
 
     @asynccontextmanager
     async def lifespan(app):
+        worker = asyncio.create_task(queue_worker())
         yield
+        stop.set()
+        await worker
         await asyncio.to_thread(executor.shutdown, wait=True)
 
     app = FastAPI(title="PSD Headless", version="1.0.0", lifespan=lifespan)
@@ -59,7 +82,7 @@ def create_app(template_root=None, output_root=None, font=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Cache-Control"] = "no-store"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'"
+            "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'"
         )
         return response
 
@@ -79,6 +102,77 @@ def create_app(template_root=None, output_root=None, font=None):
             "token": None if api_key else token,
             "locked_roots": bool(api_key),
         }
+
+    async def read_payload(request: Request):
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > max_bytes:
+                raise HTTPException(413, "Maximal 5 MiB")
+        return raw
+
+    @app.post("/api/queue", dependencies=[Depends(authenticate)], status_code=202)
+    async def enqueue(request: Request):
+        try:
+            data = BatchRequest.model_validate_json(await read_payload(request))
+            templates = str(Path(data.templates or template_root).expanduser().resolve())
+            output = str(Path(data.output or output_root).expanduser().resolve())
+            if api_key and (templates != template_root or output != output_root):
+                raise ValueError("Ordner im Netzwerkmodus können nur am Server geändert werden")
+            jobs = (
+                data.jobs
+                if data.jobs is not None
+                else parse_jobs(data.content or "", data.extension)
+            )
+            state = await asyncio.to_thread(
+                queue.submit, jobs, templates, output, data.font or font, data.schedule
+            )
+            return {
+                "id": state["id"],
+                "status": state["status"],
+                "duplicate": state.get("duplicate", False),
+            }
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/queue", dependencies=[Depends(authenticate)])
+    def queue_list():
+        return [
+            {k: s.get(k) for k in ("id", "status", "created", "done", "total", "schedule", "error")}
+            for s in queue.list()
+        ]
+
+    @app.get("/api/queue/{identifier}", dependencies=[Depends(authenticate)])
+    def queue_status(identifier: str):
+        try:
+            return queue.get(identifier)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/queue/{identifier}/{action}", dependencies=[Depends(authenticate)])
+    async def queue_decide(identifier: str, action: str, request: Request):
+        import json
+
+        try:
+            data = json.loads(await read_payload(request))
+            return await asyncio.to_thread(
+                queue.decide, identifier, action, data.get("reason", ""), data.get("series", False)
+            )
+        except (ValueError, OSError, TypeError, AttributeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/queue/{identifier}/images/{index}/{side}", dependencies=[Depends(authenticate)])
+    def queue_image(identifier: str, index: int, side: str):
+        try:
+            if side not in {"before", "preview"} or index < 0:
+                raise ValueError("Ungültige Vorschau")
+            state = queue.get(identifier)
+            path = Path(state["results"][index][side]).resolve()
+            if not path.is_relative_to(queue.root):
+                raise ValueError("Ungültiger Vorschaupfad")
+            return FileResponse(path)
+        except (ValueError, IndexError, KeyError) as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.post("/api/batches", dependencies=[Depends(authenticate)], status_code=202)
     async def start(request: Request):

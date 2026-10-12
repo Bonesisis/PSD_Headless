@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Added reusable field profiles, native-size artboard PNG/JPEG exports and explicit
+  rectangular image replacement with focal crop and ICC conversion.
+- Added a persistent local review queue, duplicate detection, restart recovery,
+  retries, before/after previews and approval of exact output bytes.
+- Added scheduled and recurring date-field jobs, with explicit series approval.
+- Added CLI/API queue access and simplified dashboard with contextual help.
+- Added synthetic artboard, image, approval, recurrence and 110-job workflow tests.
+- Added persistent Docker queue storage. Windows Docker Desktop remains unverified.
+
 ## 1.0.0 — 2026-10-12
 
 - Added recursive text-layer inspection and strict RGB8 text rendering.

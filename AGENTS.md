@@ -10,6 +10,9 @@ styles rather than silently changing them.
 - `pshl/engine.py`: recursive layer selection, strict typography, embedded
   Smart Object text replacement, and image export.
 - `pshl/jobs.py`: JSON/YAML/CSV parsing, isolated jobs, bounded process workers.
+- `pshl/profiles.py`: explicit editorial field mappings and per-artboard exports.
+- `pshl/queue.py`: local SQLite review queue, OS worker lock, preview hashes,
+  approval, scheduled publication and explicit recurring-series authorization.
 - `pshl/cli.py`: inspect, render, batch, serve.
 - `pshl/api.py`: authenticated background batches, status, reports, static UI.
 - `pshl/static/`: plain HTML/CSS/JavaScript; no frontend build or external CDN.
@@ -42,6 +45,9 @@ Run tests after each significant change. Verify the dashboard in a browser.
 - No silent font fallback. Invalid or ambiguous targets must be actionable errors.
 - No overwriting inputs or existing outputs. Write rendered files via temporary
   siblings and exclusive destination reservation. Reports use exclusive creation.
+- Review publication copies the exact approved preview bytes with exclusive
+  creation. Partial NAS copies require explicit operator cleanup, never overwrite.
+  Keep queue databases on local disk; do not remove state automatically.
 - API is for trusted operators. Keep authentication, root containment, host/origin
   validation and the 5 MiB request limit. Never expose the server unauthenticated.
 - No automatic downloading of templates, fonts, scripts or external smart objects.

@@ -109,7 +109,20 @@ def test_smart_object_job_validation_and_centered_layout(tmp_path):
 
 
 def test_embedded_smart_object_text_fans_out_to_multiple_artboards(tmp_path, monkeypatch):
+    from copy import deepcopy
+
+    from psd_tools.api.layers import PixelLayer
+    from psd_tools.constants import Tag
+
     job, _ = fixture(tmp_path)
+    nested = PSDImage.open(job["template"])
+    second = PixelLayer.frompil(
+        Image.new("RGB", (200, 30), "white"), nested, name="Subtitle", left=10, top=80
+    )
+    second.tagged_blocks[Tag.TYPE_TOOL_OBJECT_SETTING] = deepcopy(
+        nested[1][0][0].tagged_blocks[Tag.TYPE_TOOL_OBJECT_SETTING]
+    )
+    nested.save(job["template"])
     original_open = PSDImage.open
     monkeypatch.setattr(PSDImage, "open", lambda _source: original_open(job["template"]))
 
@@ -172,6 +185,17 @@ def test_embedded_smart_object_text_fans_out_to_multiple_artboards(tmp_path, mon
     assert [(item[2], item[3]) for item in prepared] == [(0, 0), (250, 0)]
     assert all(item[1].size == (240, 120) for item in prepared)
     assert len([warning for warning in warnings if "ersetzt" in warning]) == 2
+    specifications["subtitle"] = {
+        "text": "A second field",
+        "font": job["font"],
+        "size": 15,
+        "targets": [
+            {"layer": "Artwork Smart Object", "text_layer": "Subtitle", "box": [10, 80, 230, 115]}
+        ],
+    }
+    prepared, warnings = _prepare_smart_objects(root, specifications)
+    assert len(prepared) == 2  # both fields merged into one replacement per outer object
+    assert len([warning for warning in warnings if "ersetzt" in warning]) == 3
 
 
 @pytest.mark.parametrize("workers", [1, 2])

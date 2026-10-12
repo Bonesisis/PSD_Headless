@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "template": "template.psd",
+  "defaults": {"font": "fonts/example.ttf", "shrink": true},
+  "fields": {
+    "title": {
+      "layers": ["Cover/Title", "Poster/Title"],
+      "style": {"align": "center", "valign": "center", "min_size": 18}
+    },
+    "date": {"layers": ["Cover/Date", "Poster/Date"]}
+  },
+  "exports": [
+    {"artboard": "Cover", "output": "{name}-{date}-cover.png"},
+    {"artboard": "Poster", "output": "{name}-{date}-poster.jpg"}
+  ]
+}
