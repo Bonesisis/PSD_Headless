@@ -13,8 +13,9 @@ from pathlib import Path
 
 import yaml
 
-from .engine import RenderError, render_job
+from .engine import RenderError
 from .profiles import expand_profile
+from .renderers import render_job
 
 
 def parse_jobs(raw, extension=".json"):
@@ -62,11 +63,15 @@ def resolve_path(value, root):
 
 
 def normalize(job, template_root, output_root, font=None, restricted=False):
+    from .font_mapping import resolve_style
+
     if not isinstance(job, dict):
         raise RenderError("Auftrag muss ein Objekt sein")
     if "_error" in job:
         raise RenderError(job["_error"])
     job = dict(job)
+    if job.get("renderer", "python") not in {"python", "photocraft"}:
+        raise RenderError("Unbekannte Rendering-Engine")
     for key, root in [("template", template_root), ("output", output_root)]:
         path = resolve_path(job.get(key), root)
         if restricted and not path.is_relative_to(Path(root).resolve()):
@@ -81,15 +86,19 @@ def normalize(job, template_root, output_root, font=None, restricted=False):
     if job.get("font") or font:
         job["font"] = str(resolve_path(job.get("font") or font, template_root))
     job["fonts"] = {k: str(resolve_path(v, template_root)) for k, v in job.get("fonts", {}).items()}
-    job["styles"] = {k: dict(v) for k, v in job.get("styles", {}).items()}
+    job["styles"] = {k: resolve_style(v, template_root) for k, v in job.get("styles", {}).items()}
     for style in job["styles"].values():
         if style.get("font"):
             style["font"] = str(resolve_path(style["font"], template_root))
-    job["smart_objects"] = {k: dict(v) for k, v in job.get("smart_objects", {}).items()}
+    job["smart_objects"] = {
+        k: resolve_style(v, template_root) for k, v in job.get("smart_objects", {}).items()
+    }
     for spec in job["smart_objects"].values():
         if spec.get("font"):
             spec["font"] = str(resolve_path(spec["font"], template_root))
-        spec["targets"] = [dict(target) for target in spec.get("targets", [])]
+        spec["targets"] = [
+            resolve_style(target, template_root) for target in spec.get("targets", [])
+        ]
         for target in spec["targets"]:
             if target.get("font"):
                 target["font"] = str(resolve_path(target["font"], template_root))

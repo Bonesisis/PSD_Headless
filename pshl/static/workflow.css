@@ -6,3 +6,7 @@ figure { margin: 12px 0; min-width: 0; } figure img { width: 100%; height: auto;
 figcaption { font-size: 13px; margin-bottom: 6px; } .check { display: flex; gap: 10px; align-items: flex-start; } .check input { width: auto; }
 .queue-item { display: block; margin: 8px 0; text-align: left; overflow-wrap: anywhere; } #queue { margin-top: 24px; } #events { max-height: 240px; overflow: auto; } .actions { flex-wrap: wrap; }
 @media (max-width: 600px) { .preview-pair { grid-template-columns: 1fr; } }
+.table-scroll { max-height: 280px; overflow: auto; } table { border-collapse: collapse; width: 100%; font-size: 12px; } th, td { padding: 8px; border-bottom: 1px solid #e1e7e4; text-align: left; } th { position: sticky; top: 0; background: #f3f8f6; }
+td, #delivery-location { overflow-wrap: anywhere; } .workspace > * { min-width: 0; }
+fieldset, select { min-width: 0; max-width: 100%; } #active-render { overflow-wrap: anywhere; }
+.result-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 130px; overflow: auto; margin: 12px 0; } .result-list button { padding: 6px 9px; font-size: 12px; } .result-list button[aria-current=true] { outline: 2px solid #138879; outline-offset: 1px; } #import-status { overflow-wrap: anywhere; }

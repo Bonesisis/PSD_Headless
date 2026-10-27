@@ -1,0 +1,46 @@
+GITHUB-UPDATE – ZUR DURCHSICHT
+Stand: 27.10.2026
+
+Dieser Ordner enthält den vollständigen vorbereiteten Quellcode, nicht nur
+geänderte Dateien. Die Projektstruktur und versteckten Konfigurationsdateien
+(z. B. .github und .gitignore) gehören dazu.
+
+NICHT HOCHGELADEN: Kein Push, kein Commit und keine Veröffentlichung ausgeführt.
+Dieser Ordner enthält keine .git-Historie und keine lokalen Zugangsdaten.
+
+ENTHALTEN
+- Anwendung, Weboberfläche, Tests, Startskripte und Docker-Konfiguration
+- Allgemeine Beispiele, README und aktualisiertes CHANGELOG
+- Unveränderte MIT-Lizenz mit Copyright Luca-Gene Bonzel
+
+AUSGESCHLOSSEN
+- Echte PSD-/PSB-Vorlagen und lizenzierte Schriftdateien
+- Excel-Dateien und andere lokale Auftragsdaten
+- Bilder, Exporte, Vorschauen und Auftragsdatenbanken
+- Input_Test, local-work, .venv, .env und private Einstellungen
+- PhotoCraft-Programmdateien und lokal erstellte Docker-Images
+
+PRÜFUNGEN
+- 68 Tests bestanden, 1 übersprungen, direkt in dieser Kopie ausgeführt
+- Ruff-Codeprüfung und Formatprüfung erfolgreich
+- Gitleaks 8.30.1: keine Treffer in der finalen Kopie
+- Gitleaks: keine Treffer in den 6 lokal verfügbaren Git-Commits
+- Zusätzliche Prüfung auf private Rechnerpfade und Kundendaten
+- LICENSE bytegleich mit der Projektdatei; Autorenangabe beibehalten
+- .gitignore um dauerhafte Ausschlüsse für private Daten ergänzt
+
+Ein automatischer Geheimnis-Scan kann keine absolute Garantie geben.
+Die Prüfergebnisse beziehen sich auf diesen Stand; spätere Ergänzungen erneut prüfen.
+Die Tests erzeugen synthetische Vorlagen und Schriften nur temporär.
+
+NUTZUNG
+Zuerst README.md und CHANGELOG.md ansehen. DATEILISTE.txt enthält alle
+Dateinamen und SHA-256-Prüfsummen (außer dieser Dateiliste selbst).
+Dieser Quellcode allein enthält keine einsatzfertigen Kundenvorlagen:
+Vorlagen, Schriften und PhotoCraft werden separat lokal eingerichtet.
+Bestehende lokale Produktionsprofile sind absichtlich nicht enthalten.
+
+Zum späteren GitHub-Update die Projektdateien über das bestehende Repository
+übernehmen und vor dem Commit die Auswahl prüfen. Nicht den kompletten
+Arbeitsordner mit Kundendaten hochladen. Dieser Ordnername soll nicht als
+zusätzliche Unterebene im Repository landen.

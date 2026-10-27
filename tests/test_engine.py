@@ -11,7 +11,7 @@ from psd_tools.api.layers import Group, PixelLayer
 
 from pshl.engine import RenderError, _prepare_smart_objects, font_file, inspect_psd, render_job
 from pshl.jobs import parse_jobs, run_batch
-from tests.fixtures import fixture
+from tests.fixtures import fixture, synthetic_font
 
 
 def test_nested_type_inspection(tmp_path):
@@ -58,6 +58,14 @@ def test_dry_run_and_missing_font(tmp_path):
         render_job(job, True)
     with pytest.raises(RenderError, match="Schrift fehlt"):
         font_file("NoSuchSyntheticFont123456")
+
+
+def test_windows_per_user_font_discovery(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    font = tmp_path / "Microsoft/Windows/Fonts/user-installed.ttf"
+    font.parent.mkdir(parents=True)
+    synthetic_font(font)
+    assert font_file("SyntheticTest-Regular") == font
 
 
 def test_shrink_and_overflow(tmp_path):

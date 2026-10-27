@@ -46,6 +46,7 @@ def font_file(name, explicit=None, fonts=None):
         Path("/usr/share/fonts"),
         Path.home() / ".local/share/fonts",
         Path(os.getenv("WINDIR", "C:/Windows")) / "Fonts",
+        Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData/Local")) / "Microsoft/Windows/Fonts",
     ]
     for directory in directories:
         if not directory.exists():

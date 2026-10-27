@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import threading
@@ -17,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import controller, planners
 from .jobs import parse_jobs, run_batch
 from .queue import ReviewQueue
 
@@ -42,6 +44,8 @@ def create_app(template_root=None, output_root=None, font=None, state_root=None)
     lock, states = threading.Lock(), {}
     max_bytes = 5 * 1024 * 1024
     queue = ReviewQueue(state_root or os.getenv("PSHL_STATE_DIR", ".pshl-state"))
+    drafts = queue.root / "imports"
+    drafts.mkdir(exist_ok=True)
     stop = asyncio.Event()
 
     async def queue_worker():
@@ -101,6 +105,7 @@ def create_app(template_root=None, output_root=None, font=None, state_root=None)
             "output": output_root,
             "token": None if api_key else token,
             "locked_roots": bool(api_key),
+            "planner": planners.settings(),
         }
 
     async def read_payload(request: Request):
@@ -110,6 +115,111 @@ def create_app(template_root=None, output_root=None, font=None, state_root=None)
             if len(raw) > max_bytes:
                 raise HTTPException(413, "Maximal 5 MiB")
         return raw
+
+    async def read_object(request: Request) -> dict:
+        data = json.loads(await read_payload(request))
+        if not isinstance(data, dict):
+            raise ValueError("JSON-Anfrage muss ein Objekt sein")
+        return data
+
+    def load_draft(identifier: str):
+        if len(identifier) != 32 or any(c not in "0123456789abcdef" for c in identifier):
+            raise ValueError("Ungültige Import-ID")
+        return json.loads((drafts / (identifier + ".json")).read_text(encoding="utf-8"))
+
+    @app.get("/api/controller/catalog", dependencies=[Depends(authenticate)])
+    def profile_catalog():
+        try:
+            return controller.catalog(template_root)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/controller/import", dependencies=[Depends(authenticate)])
+    async def import_excel(request: Request):
+        try:
+            raw = bytes(await read_payload(request))
+            table = await asyncio.to_thread(controller.read_excel, raw)
+            profiles = controller.catalog(template_root)
+            proposed = controller.rule_plan(table, profiles)
+            plan = {"assignments": proposed["assignments"]}
+            jobs = (
+                controller.compile_plan(plan, table, profiles, template_root)
+                if not proposed["errors"]
+                else []
+            )
+            identifier = uuid4().hex
+            with (drafts / (identifier + ".json")).open("x", encoding="utf-8") as stream:
+                json.dump(table, stream, ensure_ascii=False)
+            return {
+                "id": identifier,
+                "table": table,
+                "plan": plan,
+                "jobs": jobs,
+                "delivery": controller.delivery_preview(jobs, template_root),
+                "export_count": sum(
+                    profiles[a["profile_id"]]["exports"] for a in plan["assignments"]
+                ),
+                "errors": proposed["errors"],
+                "planner_input": controller.planner_input(table, profiles),
+            }
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/controller/{identifier}/plan", dependencies=[Depends(authenticate)])
+    async def plan_excel(identifier: str, request: Request):
+        try:
+            data = await read_object(request)
+            table, profiles = load_draft(identifier), controller.catalog(template_root)
+            if data.get("mode") == "model":
+                plan = await asyncio.to_thread(
+                    planners.propose, controller.planner_input(table, profiles)
+                )
+            elif "plan" in data:
+                plan = data["plan"]
+            else:
+                raise ValueError("mode: model oder plan erforderlich")
+            jobs = controller.compile_plan(plan, table, profiles, template_root)
+            return {
+                "plan": plan,
+                "jobs": jobs,
+                "delivery": controller.delivery_preview(jobs, template_root),
+            }
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post(
+        "/api/controller/{identifier}/submit", dependencies=[Depends(authenticate)], status_code=202
+    )
+    async def submit_excel(identifier: str, request: Request):
+        try:
+            data = await read_object(request)
+            jobs = controller.compile_plan(
+                data["plan"],
+                load_draft(identifier),
+                controller.catalog(template_root),
+                template_root,
+            )
+            state = await asyncio.to_thread(
+                queue.submit, jobs, template_root, output_root, font, data.get("schedule")
+            )
+            return {
+                "id": state["id"],
+                "status": state["status"],
+                "duplicate": state.get("duplicate", False),
+                "packages": state.get("packages", []),
+            }
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/queue/{identifier}/items/{index}/review", dependencies=[Depends(authenticate)])
+    async def review_image(identifier: str, index: int, request: Request):
+        try:
+            data = await read_object(request)
+            return await asyncio.to_thread(
+                queue.review_item, identifier, index, data["decision"], data.get("reason", "")
+            )
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.post("/api/queue", dependencies=[Depends(authenticate)], status_code=202)
     async def enqueue(request: Request):
@@ -167,7 +277,8 @@ def create_app(template_root=None, output_root=None, font=None, state_root=None)
             if side not in {"before", "preview"} or index < 0:
                 raise ValueError("Ungültige Vorschau")
             state = queue.get(identifier)
-            path = Path(state["results"][index][side]).resolve()
+            item = next((r for r in state["results"] if r["index"] == index), {})
+            path = Path(item[side]).resolve()
             if not path.is_relative_to(queue.root):
                 raise ValueError("Ungültiger Vorschaupfad")
             return FileResponse(path)

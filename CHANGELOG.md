@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added Excel import, bounded JSON planning and optional provider-independent
+  planners using Ollama or a chat-completions-compatible API.
+- Added an optional offline Docker adapter for operator-installed PhotoCraft,
+  with embedded Smart Object text edits and artboard JPG/PNG exports.
+- Added explicit approved font-name mappings with font-file hash validation
+  and discovery of Windows per-user fonts.
+- Added weekly delivery packages, optional platform/category/week/order layout,
+  revision reservation, per-image review, manifests and review reports.
+- Rendering remains limited to supported template features; PhotoCraft and
+  Photoshop output are not guaranteed to be pixel-identical. PhotoCraft binaries,
+  licensed fonts and private templates are not included.
+
 - Added reusable field profiles, native-size artboard PNG/JPEG exports and explicit
   rectangular image replacement with focal crop and ICC conversion.
 - Added a persistent local review queue, duplicate detection, restart recovery,

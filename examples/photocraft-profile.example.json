@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "template": "template.psd",
+  "defaults": {"renderer": "photocraft"},
+  "fields": {
+    "date": {
+      "display": "weekday_de",
+      "smart_objects": [
+        {"outer": "Cover/Text/Date", "inner": "Date"},
+        {"outer": "Poster/Text/Date", "inner": "Date"}
+      ],
+      "style": {
+        "font": "fonts/example.ttf",
+        "font_family": "Example Family",
+        "font_style": "Regular",
+        "box": [5, 5, 800, 90],
+        "min_size": 30
+      }
+    }
+  },
+  "exports": [
+    {"artboard": "Cover", "output": "PlatformA/{date}-{name}-cover.png"},
+    {"artboard": "Cover", "output": "PlatformA/{date}-{name}-cover.jpg"},
+    {"artboard": "Poster", "output": "PlatformA/{date}-{name}-poster.png"},
+    {"artboard": "Poster", "output": "PlatformA/{date}-{name}-poster.jpg"}
+  ]
+}

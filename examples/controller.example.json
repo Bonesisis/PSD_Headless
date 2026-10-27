@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "profiles": {
+    "platform-a": {
+      "platform": "Platform A",
+      "output_folder": "PlatformA",
+      "profile": "profiles/platform-a.json"
+    }
+  }
+}

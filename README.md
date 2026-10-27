@@ -5,6 +5,203 @@
 Lokale PSD-Textverarbeitung mit Batch-CLI, Browseroberfläche und HTTP-API.
 Windows, macOS und Linux · Python 3.11–3.13 · MIT · Luca-Gene Bonzel
 
+## Neuer Controller: Excel, unabhängige KI und PhotoCraft
+
+Der Browser ist der zentrale Controller. Die gleiche authentifizierte HTTP-API
+kann ein Terminal, eine lokale KI oder ein externer Agent verwenden. Der Renderer
+benötigt weder OpenAI noch einen API-Key. Die KI ist ein optionaler Planer.
+
+```mermaid
+flowchart TD
+  Excel[Excel im Browser hochladen] --> Import[Tabellenwerte prüfen]
+  Import --> Rules[Regeln für bekannte Spalten]
+  Import --> AI[Optional: lokales Modell oder API-Anbieter]
+  Rules --> Plan[JSON-Plan mit Profil-IDs und Textfeldern]
+  AI --> Plan
+  Plan --> Check[Schema und registrierte Profile prüfen]
+  Check --> Queue[Lokale Warteschlange]
+  Queue --> Render[Python oder isoliertes PhotoCraft]
+  Render --> Review[Live-Status und einzelne Bilder prüfen]
+  Review --> Publish[Freigabe: exakt geprüfte Dateien kopieren]
+  Publish --> Folders[Kalenderwoche / Plattform / Auftrag / Artboard]
+```
+
+**Einrichtung:** Eine `controller.json` im Vorlagenordner registriert die erlaubten
+Plattformen und Profile; siehe [Katalog](examples/controller.example.json) und
+[PhotoCraft-Profil](examples/photocraft-profile.example.json). Pfade in Profilen
+beziehen sich auf den Vorlagenordner. Die Basis-Exportpfade des Profils liegen im
+jeweiligen `output_folder`. Der Excel-Controller ergänzt daraus automatisch eine
+Wochenablage. Die ISO-Kalenderwoche kommt aus dem **Datum der Excel-Zeile**,
+nicht aus dem Uploaddatum. Enthält eine Tabelle mehrere Wochen, entstehen mehrere
+Wochenpakete. ISO-Wochenjahre werden auch am Jahreswechsel korrekt behandelt.
+
+```text
+VOD_2026-KW44/
+  PlatformA/
+    Auftrag-001-Spieltag-Highlights/
+      Artwork (1920x2880px).jpg
+      Artwork (1200x1600px).png
+  PlatformB/
+    Auftrag-006-Spieltag-Highlights/
+      Cover.jpg
+      Poster.png
+  manifest.json
+  pruefbericht.json
+```
+
+Die Auftragsnummer folgt der Excel-Zeilenreihenfolge über alle Plattformen hinweg;
+der Ordner enthält zusätzlich einen gekürzten Spiel-/Anzeigetitel. Die Dateinamen
+entsprechen den PSD-Artboardnamen aus dem Profil. Nur unter Windows unzulässige
+Zeichen, reservierte Gerätenamen, abschließende Leerzeichen/Punkte oder überlange
+Namen werden angepasst. Mehrdeutige bereinigte Namen erhalten eine stabile Kennung.
+Bei verschachtelten Artboards kann das Profil `artboard_name` als exakten Namen
+zusätzlich zum vollständigen `artboard`-Selektor hinterlegen. Ohne Artboard heißt
+ein vollständiger Canvas-Export `Canvas.png` bzw. `Canvas.jpg`.
+
+`manifest.json` ordnet Zeilen, Titel, Vorlage, Original-Artboardnamen, relative
+Dateipfade, Abmessungen und SHA256-Prüfsummen einander zu. `pruefbericht.json`
+enthält Freigaben/Ausschlüsse, Begründungen und Renderwarnungen. Die beiden Dateien
+entstehen bei der Veröffentlichung im Wochenordner; lokale Hostpfade und Secrets
+werden nicht hineingeschrieben. Abgelehnte Bilder stehen als ausgeschlossen im
+Manifest, werden aber nicht kopiert. Reportdateien werden exklusiv erstellt;
+bei einem abgebrochenen NAS-Transfer gilt dieselbe manuelle Teilkopie-Prüfung wie
+für Bilder. Ein Paket ist erst beim Queue-Status `finished` vollständig.
+
+Identische Aufträge werden wiedererkannt. Eine geänderte Neuauflage derselben Woche
+erhält einen separaten Revisionsordner, etwa `VOD_2026-KW44-R02`; vorhandene Pakete
+und deren Berichte werden nie überschrieben. Dieser endgültige Paketname wird
+beim Start reserviert und im Status angezeigt. Wiederkehrende Controller-Aufträge
+schreiben Datum und Wochenordner fort. Die optionalen `delivery`-Metadaten bleiben
+in den Profilaufträgen erhalten, sodass derselbe Ablauf auch über CLI/API funktioniert.
+Ältere direkte Aufträge ohne `delivery` behalten ihre ausdrücklich definierten Pfade.
+Interne Vorschauen und Statusdateien liegen weiterhin getrennt auf lokaler Platte.
+
+**Excel:** XLSX bis 5 MiB, entpackt bis 32 MiB, höchstens 1.000 Datenzeilen.
+Die Kopfzeile wird innerhalb der ersten 30 Zeilen und 40 Spalten gesucht:
+`Plattform`, `Datum`, optional `Anzeigetitel` und `PSD-Datei`.
+Es darf genau eine passende Tabelle geben. ISO-Daten, deutsche Datumsangaben und
+echte Excel-Datumszellen werden unterstützt. Formeln in Auftragsfeldern werden
+abgelehnt. `Bilddatei` und `Ausgabeordner` aus Excel werden nicht ausgeführt;
+Vorlage, Ziele und Ausgabeorte stammen aus dem registrierten Profil.
+Ein Datumprofil verwendet nur das Datum; ein Titel wird erst mit einem dafür
+konfigurierten Textziel gerendert. `display: weekday_de` formatiert ISO-Daten
+beispielsweise als `Dienstag, 20.10.26`, auch bei wiederkehrenden Aufträgen.
+
+**Prüfung:** Erfolgreich gerenderte Bilder lassen sich bereits während des Laufs
+einzeln mit „gut“ oder „ablehnen“ bewerten. „Geprüfte Auswahl ausgeben“ setzt eine
+Entscheidung für jedes Bild voraus und veröffentlicht nur die guten Bilder.
+„Alle gut – freigeben“ ist weiterhin möglich, sofern kein Bild abgelehnt wurde.
+Teilfreigaben sind auf einmalige Aufträge begrenzt; Serien bleiben vollständige
+Profilaufträge. Ein manueller Wiederholungsknopf bereitet die bisherigen Aufträge
+zur Bearbeitung vor. Ohne geänderte Daten wird derselbe Auftrag wiedererkannt.
+
+### Geplant: externe Freigabe per E-Mail
+
+Noch nicht implementiert und durch die Einrichtung nicht automatisch aktiviert:
+Eine E-Mail soll später einen Link zu einer kleinen Freigabeseite mit vier bis fünf
+repräsentativen Artboards, „Freigeben“, „Ablehnen“ und Kommentarfeld enthalten.
+Die Seite muss klar benennen, ob die Entscheidung die gezeigten Bilder, einen
+ganzen Auftrag oder den gesamten Wochenlauf umfasst. Eine Stichprobe ist keine
+vollständige visuelle Prüfung aller Exporte.
+
+Für Empfänger außerhalb des lokalen Netzwerks ist eine erreichbare HTTPS-Seite
+nötig. Vorgesehen ist ein kleines, getrenntes Freigabeportal: Der lokale Controller
+lädt nur die ausgewählten Vorschaubilder und Auftragsmetadaten hoch und holt
+Entscheidungen über eine ausgehende Verbindung ab. Der lokale Render-Server und
+die PSD-Vorlagen bleiben intern. Ein `localhost`-Link in einer E-Mail funktioniert
+auf dem Rechner des Empfängers nicht als Zugriff auf diesen Controller.
+
+Links sollen pro Empfänger/Auftrag zufällig, zeitlich begrenzt und widerrufbar sein;
+bei höherem Schutzbedarf kommt eine Anmeldung hinzu. Reine Linkaufrufe dürfen
+keine Freigabe auslösen, da Mailprogramme Links vorab prüfen können. Bestätigungen
+werden mit Identität/Zeitpunkt und den genauen Bildprüfsummen protokolliert;
+geänderte Bilder benötigen eine neue Freigabe. Vor der Umsetzung werden Hosting,
+Empfänger, Freigabeumfang, Aufbewahrung sowie „eine oder alle Personen bestätigen“
+festgelegt. Bis dahin gibt es keinen Mailversand und keine externe Veröffentlichung.
+
+### Austauschbarer KI-Planer
+
+Standard ist die regelbasierte Zuordnung ohne Inferenz. Optional kann der Server
+einen HTTP-Endpunkt verwenden, über die Konfiguration aus [.env.example](.env.example):
+
+| Einstellung | Lokales Ollama | Chat-Completions-kompatibler Anbieter |
+|---|---|---|
+| `PSHL_PLANNER_PROTOCOL` | `ollama` | `chat-completions` |
+| `PSHL_PLANNER_URL` | `http://127.0.0.1:11434/api/chat` | vollständiger `/v1/chat/completions`-Endpunkt |
+| `PSHL_PLANNER_MODEL` | installiertes Modell | Modell-ID des Anbieters |
+| `PSHL_PLANNER_KEY` | bei Bedarf als Prozessvariable | als Prozessvariable aus dem Secret-Manager |
+
+Ollamas [Chat-Schnittstelle](https://docs.ollama.com/api/chat) und der kompatible
+[LM-Studio-Endpunkt](https://lmstudio.ai/docs/developer/openai-compat/chat-completions)
+sind Beispiele für die unterstützten Protokolle. Andere Anbieter mit abweichender
+Authentifizierung oder API benötigen einen zusätzlichen Transportadapter.
+Ein API-Key allein macht beliebige Anbieter nicht automatisch kompatibel.
+
+Der KI-Knopf sendet Tabellenwerte, Profil-IDs und das Planschema. PSDs, Schriften
+und Bilder werden dabei nicht übertragen. Externe Aufrufe können Kosten verursachen;
+es gibt keine automatischen Aufrufe, Wiederholungen oder Anbieterwechsel.
+Maximal ein Modellaufruf gleichzeitig, 60 Sekunden HTTP-Timeout und 512 KiB Antwortlimit.
+Secrets gehören ausschließlich in den Credential Manager und die Prozessumgebung,
+niemals in den Browser, Profile, JSON-Aufträge oder `.env`-Dateien. Auf AIWS kann
+der Server über `aiws run --secret ALIAS --env PSHL_PLANNER_KEY -- PROGRAMM ...`
+gestartet werden. Es wird kein Provider-SDK benötigt.
+
+Alternativ „Planungsdaten für externe KI“ herunterladen, extern einen Plan erzeugen
+lassen und die JSON-Antwort wieder laden. Der Browser zeigt ihn vor der Ausführung.
+Die erlaubte Antwort enthält ausschließlich `assignments` mit `row`, `profile_id`
+und `fields`. Unbekannte Profile, Zusatzbefehle, doppelte oder ausgelassene Zeilen
+werden abgelehnt. KI-Zugang zum Planer erteilt keine Veröffentlichungsfreigabe.
+
+HTTP-Ablauf (jeweils `X-PSHL-Token`, maximal 5 MiB Request):
+
+1. `GET /api/controller/catalog`: registrierte Profile lesen.
+2. `POST /api/controller/import`: XLSX als roher Request-Body; liefert Import-ID,
+   Tabellenwerte, Planvorschlag, Fehler und Planungsdaten.
+3. `POST /api/controller/ID/plan`: `{"plan": {...}}` validiert einen externen Plan;
+   `{"mode":"model"}` fordert ausdrücklich einen Modellvorschlag an.
+4. `POST /api/controller/ID/submit`: `{"plan": {...}, "schedule": null}` startet
+   die Vorschau und liefert die Warteschlangen-ID. Zeitpläne wie unten beschrieben.
+5. Bestehende `/api/queue`-Status- und Bildrouten verwenden. Einzelbewertungen:
+   `POST /api/queue/ID/items/INDEX/review` mit `{"decision":"approved"}` oder
+   `{"decision":"rejected","reason":"..."}`. Anschließend
+   `POST /api/queue/ID/publish-reviewed` mit `{}`.
+
+### Optionaler PhotoCraft-Renderer
+
+[PhotoCraft](https://github.com/storytold/photocraft) bleibt ein eigenständiges
+Programm. Dieser Adapter steuert dessen CLI; PhotoCraft-Quellcode und Binärdateien
+werden nicht in dieses Repository kopiert. Die vorhandenen Projekt-Credits,
+Autorenangaben und MIT-Lizenz von PSD Headless bleiben unverändert. Bei separater
+Weitergabe von PhotoCraft gelten dessen eigene Lizenz- und Copyright-Hinweise
+(MIT oder Apache-2.0); diese müssen der jeweiligen Distribution beiliegen.
+
+Der Adapter wurde mit PhotoCraft **0.9.0 Linux x86_64** entwickelt. Operatoren
+installieren und prüfen die CLI selbst, bauen bei Bedarf das optionale Runtime-Image
+mit `docker build -f docker/photocraft.Dockerfile -t pshl-photocraft-runtime .`
+und konfigurieren CLI-Pfad, SHA256 und vorzugsweise eine unveränderliche Docker-Image-ID.
+Der Server lädt weder CLI noch Images, Vorlagen oder Fonts automatisch herunter.
+Docker muss laufen. Pro Arbeitsgruppe wird ein temporärer Container ohne Netzwerk,
+Host-Mounts oder Host-Secrets gestartet; Arbeitskopien werden hineinkopiert und der
+Container danach entfernt. Nach einem harten Serverabbruch können Container mit
+Präfix `pshl-pc-` übrig bleiben und müssen gezielt vom Operator bereinigt werden.
+
+Mit `defaults.renderer: photocraft` bearbeitet ein Profil eingebettete Smart-Object-
+Texte oder direkte Type-Layer und exportiert explizite Artboards als JPG/PNG.
+Jeder Text benötigt eine explizite Fontdatei, Familie, Stil, Zielbox und optional
+Mindestgröße. Gemeinsame Smart-Object-Inhalte werden nur einmal geändert;
+widersprüchliche Zielwerte werden abgelehnt. Innerhalb der Queue teilen Exporte
+derselben Vorlage und Textwerte einen Bearbeitungslauf. Die Original-PSD wird
+nicht geschrieben. Endausgaben sind Bilder, kein zugesichertes editierbares PSD.
+
+**Grenzen:** PhotoCraft ist keine Garantie für vollständige Photoshop-Kompatibilität.
+Neue Vorlagen brauchen visuelle Referenzprüfung. Der Adapter lehnt externe Smart
+Objects, gemischte Textstile, Warp, fehlende Glyphen und Schrift-Fallbacks ab;
+Bildersetzung ist in diesem Adapter noch nicht angebunden. Sehr lange Texte können
+an der Mindestgröße scheitern. Bildbearbeitung und Jobausführung funktionieren
+offline; Modelladapter wurden mit simulierten Antworten geprüft, nicht mit einem
+kostenpflichtigen Provider. Automatische HiDrive-/SFTP-Uploads sind nicht enthalten;
+die Ausgabe kann in einen konfigurierten lokalen oder gemounteten Zielordner erfolgen.
+
 ## Was Version 1.0 kann – und was nicht
 
 **Kein Photoshop-Ersatz und keine Garantie für pixelidentische Typografie.**
@@ -137,8 +334,9 @@ python -m pshl queue submit --jobs examples/profile-job.example.json --templates
 
 Die Vorschau entsteht sofort. Erst nach Freigabe **und** Erreichen des Termins
 wird ausgegeben. Wiederholungen erhöhen die benannten ISO-Datumsfelder
-(`YYYY-MM-DD`) um `every_days`; Dateinamen müssen diese Felder enthalten, damit
-Folgeausgaben nicht kollidieren. `queue approve ID --series` bzw. die Checkbox
+(`YYYY-MM-DD`) um `every_days`. Direkte Profil-Exporte benötigen Datumsplatzhalter
+im Dateinamen; Controller-Pakete verwenden den fortgeschriebenen Wochenordner
+und nötigenfalls eine Revision. `queue approve ID --series` bzw. die Checkbox
 erteilt auch Folgeläufen die Freigabe; ohne diese Option wird jeder Lauf geprüft.
 Veränderte Vorlagen, Profile oder explizite Bild-/Fontdateien stoppen eine Serie.
 Installierte automatisch gefundene Fonts sind nicht Teil dieser Dateiprüfung:
@@ -412,3 +610,22 @@ privates Paket erzeugen; Paket-Sichtbarkeit separat auf öffentlich setzen.
 MIT-Lizenz, Copyright © 2026 Luca-Gene Bonzel. Im Gegensatz zur früheren
 Privatnutzungslizenz erlaubt MIT auch berufliche und kommerzielle Nutzung.
 Schriften und Vorlagen brauchen ihre eigenen Nutzungsrechte.
+
+### Explicit local font mappings
+
+Text styles in jobs and profiles may use `font_postscript` instead of `font`,
+`font_family` and `font_style`. The name is resolved through
+`fonts/font-map.json` inside the configured template root. Its version-1 format
+contains `exact_postscript_fonts` entries (font path relative to the template
+root, font_family, font_style, sha256) and optional `approved_aliases` mapping
+old PostScript names directly to those entries. Only operator-approved aliases
+are used; unknown names, changed font files and conflicting explicit font
+settings fail. This also applies to embedded Smart Object targets. Licensed
+fonts and customer-specific mappings remain local. Rendering may differ from
+Photoshop even with an approved font mapping; source PSDs are never rewritten.
+
+
+Delivery profiles can set `delivery_category` (or jobs can set `delivery.category`)
+to group outputs as `platform/category/VOD_year-KWxx/order/artboard.ext`.
+Manifest and review reports stay inside each week folder. Existing legacy
+profiles without a category retain their previous layout.

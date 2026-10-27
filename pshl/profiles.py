@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from string import Formatter
 
 import yaml
+
+from .bundles import arrange_exports
 
 
 def expand_profile(job: dict, root: str, restricted: bool = False) -> list[dict]:
@@ -29,6 +32,20 @@ def expand_profile(job: dict, root: str, restricted: bool = False) -> list[dict]
         value = fields[name]
         if not isinstance(value, str):
             raise ValueError(f"Feld {name} muss Text sein")
+        if mapping.get("display"):
+            if mapping["display"] != "weekday_de":
+                raise ValueError("Unbekanntes Anzeigeformat")
+            day = datetime.strptime(value, "%Y-%m-%d")
+            weekdays = (
+                "Montag",
+                "Dienstag",
+                "Mittwoch",
+                "Donnerstag",
+                "Freitag",
+                "Samstag",
+                "Sonntag",
+            )
+            value = f"{weekdays[day.weekday()]}, {day:%d.%m.%y}"
         style = mapping.get("style", {})
         for selector in mapping.get("layers", []):
             if selector in base["layers"]:
@@ -76,7 +93,11 @@ def expand_profile(job: dict, root: str, restricted: bool = False) -> list[dict]
         entry.update(output=pattern.format_map(tokens))
         if export.get("artboard"):
             entry["artboard"] = export["artboard"]
+        if export.get("artboard_name"):
+            entry["artboard_name"] = export["artboard_name"]
         if Path(entry["output"]).suffix.lower() not in {".png", ".jpg", ".jpeg"}:
             raise ValueError("Profile exportieren nur PNG/JPEG")
         result.append(entry)
-    return result
+    if profile.get("delivery_category") and job.get("delivery"):
+        job = {**job, "delivery": {"category": profile["delivery_category"], **job["delivery"]}}
+    return arrange_exports(result, job)

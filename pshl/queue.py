@@ -15,9 +15,11 @@ from uuid import uuid4
 from PIL import Image, ImageChops
 from psd_tools import PSDImage
 
-from .engine import _find_unique, metadata, render_job, walk
+from .bundles import report_documents, week_folder
+from .engine import _find_unique, metadata, walk
 from .jobs import normalize
 from .profiles import expand_profile
+from .renderers import render_job
 
 
 def digest(path: str | Path) -> str:
@@ -38,6 +40,10 @@ class ReviewQueue:
         with self.connection() as db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, fingerprint TEXT UNIQUE, state TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS reviews (job TEXT, item INTEGER, sha256 TEXT, "
+                "decision TEXT, reason TEXT, PRIMARY KEY(job, item))"
             )
 
     @contextmanager
@@ -87,9 +93,41 @@ class ReviewQueue:
     def get(self, identifier: str) -> dict:
         with self.connection() as db:
             row = db.execute("SELECT state FROM jobs WHERE id=?", (identifier,)).fetchone()
+            decisions = db.execute(
+                "SELECT item, sha256, decision, reason FROM reviews WHERE job=?", (identifier,)
+            ).fetchall()
         if row is None:
             raise ValueError("Unbekannter Auftrag")
-        return json.loads(row[0])
+        state = json.loads(row[0])
+        state["reviews"] = {
+            str(i): {"sha256": sha, "decision": d, "reason": r} for i, sha, d, r in decisions
+        }
+        return state
+
+    def review_item(self, identifier: str, index: int, decision: str, reason: str = "") -> dict:
+        """Short DB transaction, independent of the renderer's long OS worker lock."""
+        if decision not in {"approved", "rejected"}:
+            raise ValueError("Entscheidung muss approved oder rejected sein")
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM jobs WHERE id=?", (identifier,)).fetchone()
+            if not row:
+                raise ValueError("Unbekannter Auftrag")
+            state = json.loads(row[0])
+            if state["status"] not in {"rendering", "review", "error"} or state.get(
+                "approved_bytes"
+            ):
+                raise ValueError("Auftrag ist nicht mehr in der Bildprüfung")
+            item = next((r for r in state["results"] if r["index"] == index), None)
+            if not item or item["status"] != "success":
+                raise ValueError("Bild ist noch nicht erfolgreich gerendert")
+            if digest(item["preview"]) != item["sha256"]:
+                raise ValueError("Vorschau wurde verändert; erneut prüfen")
+            db.execute(
+                "INSERT OR REPLACE INTO reviews VALUES (?, ?, ?, ?, ?)",
+                (identifier, index, item["sha256"], decision, reason),
+            )
+        return self.get(identifier)
 
     def list(self) -> list[dict]:
         with self.connection() as db:
@@ -101,6 +139,17 @@ class ReviewQueue:
     def save(self, state: dict) -> None:
         state["updated"] = utcnow()
         with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if (
+                state.get("series_approved")
+                and state["status"] == "approved"
+                and not state.get("approved_bytes")
+                and not state.get("selected_indices")
+            ):
+                if db.execute(
+                    "SELECT 1 FROM reviews WHERE job=? AND decision='rejected'", (state["id"],)
+                ).fetchone():
+                    state["status"] = "review"
             db.execute("UPDATE jobs SET state=? WHERE id=?", (json.dumps(state), state["id"]))
 
     def submit(
@@ -132,6 +181,32 @@ class ReviewQueue:
         for job in jobs:
             expanded.extend(expand_profile(job, templates, restricted=True))
         normalized = [normalize(job, templates, output, font, restricted=True) for job in expanded]
+        packaged = [j for j in normalized if j.get("delivery")]
+        if packaged and len(packaged) != len(normalized):
+            raise ValueError("Wochenpakete und direkte Ausgaben nicht in einem Batch mischen")
+        for job in packaged:
+            delivery = job["delivery"]
+            expected_week = week_folder(delivery.get("date"))
+            relative = Path(job["output"]).relative_to(Path(output).resolve())
+            category = delivery.get("category")
+            if category:
+                from .bundles import filename_component
+
+                if not isinstance(category, str) or filename_component(category) != category:
+                    raise ValueError("Ungültige Kategorie")
+                expected_package = (
+                    Path(delivery["platform"]) / category / expected_week
+                ).as_posix()
+                expected_parts = (delivery["platform"], category, expected_week, delivery["folder"])
+            else:
+                expected_package = expected_week
+                expected_parts = (expected_week, delivery["platform"], delivery["folder"])
+            if (
+                delivery.get("package") != expected_package
+                or delivery.get("week") != expected_week
+                or relative.parts[:-1] != expected_parts
+            ):
+                raise ValueError("Ungültiger Pfad für Wochenpaket")
         outputs = [job["output"] for job in normalized]
         if len(set(os.path.normcase(p) for p in outputs)) != len(outputs):
             raise ValueError("Doppelte Ausgaben im Auftrag")
@@ -157,6 +232,10 @@ class ReviewQueue:
             "results": [],
             "series_approved": False,
         }
+        if any(j.get("renderer") == "photocraft" for j in normalized):
+            from .photocraft import configuration
+
+            state["photocraft_runtime"] = configuration()
         inputs = set()
         for raw in jobs:
             if raw.get("profile"):
@@ -195,7 +274,7 @@ class ReviewQueue:
                 for raw in following
                 for entry in expand_profile(raw, templates, True)
             }
-            if next_outputs.intersection(outputs):
+            if next_outputs.intersection(outputs) and not packaged:
                 raise ValueError(
                     "Wiederholte Exporte müssen ein fortgeschriebenes Datumsfeld im Dateinamen verwenden"
                 )
@@ -206,6 +285,8 @@ class ReviewQueue:
             ).fetchone()
             if existing:
                 return {**json.loads(existing[0]), "duplicate": True}
+            self._reserve_packages(db, state)
+            outputs = [j["output"] for j in state["jobs"]]
             if any(Path(p).exists() for p in outputs):
                 raise ValueError("Mindestens eine Ausgabe existiert bereits")
             if any(Path(p).is_relative_to(self.root) for p in outputs):
@@ -221,6 +302,34 @@ class ReviewQueue:
             )
         return state
 
+    def _reserve_packages(self, db, state: dict) -> None:
+        """Reserve whole package names in the same transaction as job submission."""
+        weeks = sorted({j["delivery"]["package"] for j in state["jobs"] if j.get("delivery")})
+        if not weeks:
+            return
+        root = Path(state["output"])
+        reserved = set()
+        for row in db.execute("SELECT state FROM jobs"):
+            other = json.loads(row[0])
+            reserved.update(
+                os.path.normcase(str(Path(other["output"]) / p)) for p in other.get("packages", [])
+            )
+        state["packages"] = []
+        for week in weeks:
+            for revision in range(1, 1001):
+                package = week if revision == 1 else f"{week}-R{revision:02}"
+                path = root / package
+                if not path.exists() and os.path.normcase(str(path)) not in reserved:
+                    break
+            else:
+                raise ValueError("Zu viele Revisionen für dieselbe Kalenderwoche")
+            state["packages"].append(package)
+            for job in state["jobs"]:
+                if job["delivery"]["package"] == week:
+                    relative = Path(job["output"]).relative_to(root / week)
+                    job["output"] = str(root / package / relative)
+                    job["delivery"]["package"] = package
+
     def decide(self, identifier: str, action: str, reason: str = "", series: bool = False) -> dict:
         if not isinstance(series, bool):
             raise ValueError("series muss true oder false sein")
@@ -228,10 +337,28 @@ class ReviewQueue:
             if not acquired:
                 raise ValueError("Worker beschäftigt; bitte Freigabe kurz erneut versuchen")
             state = self.get(identifier)
-            if action == "approve" and state["status"] == "review":
+            if action in {"approve", "publish-reviewed"} and state["status"] == "review":
+                selected = []
                 for item in state["results"]:
                     if digest(item["preview"]) != item["sha256"]:
                         raise ValueError("Vorschau wurde verändert; erneut prüfen")
+                    review = state["reviews"].get(str(item["index"]), {})
+                    if action == "publish-reviewed":
+                        if review.get("sha256") != item["sha256"]:
+                            raise ValueError("Zuerst jedes Bild prüfen und bewerten")
+                        if review["decision"] == "approved":
+                            selected.append(item["index"])
+                    else:
+                        if review.get("decision") == "rejected":
+                            raise ValueError(
+                                "Abgelehnte Bilder vorhanden; geprüfte Auswahl verwenden"
+                            )
+                        selected.append(item["index"])
+                if not selected:
+                    raise ValueError("Mindestens ein Bild muss freigegeben sein")
+                if len(selected) != len(state["results"]) and state["schedule"].get("every_days"):
+                    raise ValueError("Teilfreigaben benötigen einen einmaligen Auftrag ohne Serie")
+                state["selected_indices"] = selected
                 state.update(status="approved", series_approved=bool(series))
             elif action == "reject" and state["status"] in {
                 "review",
@@ -246,8 +373,23 @@ class ReviewQueue:
                 state.pop("error", None)
             else:
                 raise ValueError("Aktion im aktuellen Status nicht möglich")
-            self.save(state)
-            return state
+            # Freeze review decisions atomically with the transition to publication.
+            # An item may have been rejected while the preview hashes were being read.
+            with self.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if action in {"approve", "publish-reviewed"}:
+                    decisions = {
+                        str(i): {"sha256": sha, "decision": d, "reason": r}
+                        for i, sha, d, r in db.execute(
+                            "SELECT item, sha256, decision, reason FROM reviews WHERE job=?",
+                            (identifier,),
+                        )
+                    }
+                    if decisions != state["reviews"]:
+                        raise ValueError("Bildbewertungen wurden geändert; Freigabe erneut prüfen")
+                state["updated"] = utcnow()
+                db.execute("UPDATE jobs SET state=? WHERE id=?", (json.dumps(state), identifier))
+            return self.get(identifier)
 
     def tick(self) -> bool:
         """Process at most one item; safe to call from CLI or server concurrently."""
@@ -277,28 +419,27 @@ class ReviewQueue:
             for path, value in state["input_hashes"].items():
                 if not Path(path).resolve().is_relative_to(Path(state["templates"])):
                     raise ValueError("Eingabepfad verlässt den Vorlagenordner")
-                if state["series_approved"] and digest(path) != value:
-                    raise ValueError("Eingabedateien der freigegebenen Serie wurden verändert")
+                if digest(path) != value:
+                    raise ValueError("Eingabedateien wurden seit Auftragserteilung verändert")
+            if state.get("photocraft_runtime"):
+                from .photocraft import configuration
+
+                if configuration() != state["photocraft_runtime"]:
+                    raise ValueError(
+                        "PhotoCraft-Konfiguration wurde seit Auftragserteilung verändert"
+                    )
         except (ValueError, OSError) as exc:
             state.update(status="error", error=str(exc))
             self.save(state)
             return
-        for index, job in enumerate(state["jobs"]):
-            try:
-                old = previous.get(index)
-                if (
-                    old
-                    and Path(old["preview"]).exists()
-                    and digest(old["preview"]) == old["sha256"]
-                ):
-                    state["results"].append(old)
-                    state["done"] += 1
-                    self.save(state)
-                    continue
-                if Path(job["output"]).exists():
-                    raise ValueError("Ziel existiert bereits")
-                preview = folder / f"{index}{Path(job['output']).suffix}"
-                result = render_job({**job, "output": str(preview)})
+
+        def record(index, result):
+            job = state["jobs"][index]
+            preview = Path(result["output"])
+            if result.get("before_source"):
+                before = Image.open(result.pop("before_source")).convert("RGBA")
+                info = {}
+            else:
                 psd = PSDImage.open(job["template"])
                 layer = (
                     _find_unique(list(walk(psd)), job["artboard"], "artboard")[1]
@@ -306,35 +447,96 @@ class ReviewQueue:
                     else psd
                 )
                 before = layer.composite(apply_icc=False).convert("RGBA")
-                before_path = folder / f"{index}-before.png"
                 info = metadata(psd)
-                before.save(before_path, dpi=info["dpi"], icc_profile=info["icc_profile"])
-                with Image.open(preview) as after:
-                    changed = ImageChops.difference(
-                        before.convert("RGB"), after.convert("RGB")
-                    ).getbbox()
-                if changed is None:
-                    result["warnings"].append(
-                        "Keine sichtbare Änderung: Ebenenziele und Text prüfen"
-                    )
-                state["results"].append(
-                    {
-                        **result,
-                        "index": index,
-                        "output": job["output"],
-                        "preview": str(preview),
-                        "before": str(before_path),
-                        "sha256": digest(preview),
-                        "changed_box": changed,
-                        "size": list(before.size),
-                    }
-                )
-            except Exception as exc:
-                state["results"].append(
-                    {"index": index, "status": "error", "error": str(exc), "warnings": []}
-                )
+            before_path = folder / f"{index}-before.png"
+            before.save(
+                before_path, **{k: v for k, v in info.items() if k in {"dpi", "icc_profile"} and v}
+            )
+            with Image.open(preview) as after:
+                if after.size != before.size:
+                    raise ValueError("Vorschau und Original haben verschiedene Abmessungen")
+                changed = ImageChops.difference(
+                    before.convert("RGB"), after.convert("RGB")
+                ).getbbox()
+            if changed is None:
+                result["warnings"].append("Keine sichtbare Änderung: Ebenenziele und Text prüfen")
+            state["results"].append(
+                {
+                    **result,
+                    "index": index,
+                    "output": job["output"],
+                    "preview": str(preview),
+                    "before": str(before_path),
+                    "sha256": digest(preview),
+                    "changed_box": changed,
+                    "size": list(before.size),
+                }
+            )
             state["done"] += 1
             self.save(state)
+
+        groups = {}
+        for index, job in enumerate(state["jobs"]):
+            old = previous.get(index)
+            if old and Path(old["preview"]).exists() and digest(old["preview"]) == old["sha256"]:
+                state["results"].append(old)
+                state["done"] += 1
+                self.save(state)
+                continue
+            key = (
+                json.dumps(
+                    {
+                        k: v
+                        for k, v in job.items()
+                        if k not in {"output", "artboard", "artboard_name", "delivery"}
+                    },
+                    sort_keys=True,
+                )
+                if job.get("renderer") == "photocraft"
+                else str(index)
+            )
+            groups.setdefault(key, []).append((index, job))
+        for entries in groups.values():
+            state["active"] = {
+                "index": entries[0][0],
+                "output": entries[0][1]["output"],
+                "exports": len(entries),
+                "phase": "Text setzen und Artboards rendern",
+            }
+            self.save(state)
+            try:
+                if any(Path(j["output"]).exists() for _, j in entries):
+                    raise ValueError("Ziel existiert bereits")
+                previews = [
+                    {**j, "output": str(folder / f"{i}{Path(j['output']).suffix}")}
+                    for i, j in entries
+                ]
+                if entries[0][1].get("renderer") == "photocraft":
+                    from .photocraft import render_group
+
+                    render_group(previews, lambda i, r: record(entries[i][0], r))
+                else:
+                    record(entries[0][0], render_job(previews[0]))
+            except Exception as exc:
+                # A late source-integrity or sandbox error invalidates this whole render group,
+                # including previews emitted before that error. Never approve partial trust.
+                affected = {i for i, _ in entries}
+                state["results"] = [r for r in state["results"] if r["index"] not in affected]
+                for index, job in entries:
+                    state["results"].append(
+                        {
+                            "index": index,
+                            "status": "error",
+                            "output": job["output"],
+                            "error": str(exc),
+                            "warnings": [],
+                        }
+                    )
+                state["done"] = len(state["results"])
+                state["error"] = str(exc)
+                self.save(state)
+        state.pop("active", None)
+        state["results"].sort(key=lambda r: r["index"])
         failed = any(item["status"] == "error" for item in state["results"])
         state["status"] = (
             "error" if failed else "approved" if state["series_approved"] else "review"
@@ -347,34 +549,13 @@ class ReviewQueue:
         state.update(status="publishing", approved_bytes=True)
         self.save(state)
         try:
+            self._claim_packages(state)
             for item in state["results"]:
-                if digest(item["preview"]) != item["sha256"]:
-                    raise ValueError("Freigegebene Vorschau wurde verändert")
-                target = Path(item["output"])
-                if not target.resolve().is_relative_to(Path(state["output"])):
-                    raise ValueError("Ausgabepfad verlässt den konfigurierten Ordner")
-                if item.get("published"):
-                    if not target.exists() or digest(target) != item["sha256"]:
-                        raise ValueError("Bereits veröffentlichte Datei fehlt oder wurde verändert")
+                if item["index"] not in state.get("selected_indices", range(state["total"])):
+                    item["excluded"] = True
                     continue
-                # Recovery after a crash between a complete copy and its DB commit.
-                if item.get("publishing") and target.exists() and digest(target) == item["sha256"]:
-                    item["published"] = True
-                    self.save(state)
-                    continue
-                if target.exists():
-                    raise ValueError(
-                        f"Ausgabe existiert bereits (auch Teilkopien werden nicht überschrieben): {target}"
-                    )
-                item["publishing"] = True
-                self.save(state)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with target.open("xb") as destination, Path(item["preview"]).open("rb") as source:
-                    shutil.copyfileobj(source, destination)
-                    destination.flush()
-                    os.fsync(destination.fileno())
-                item["published"] = True
-                self.save(state)
+                self._publish_file(state, item)
+            self._publish_reports(state)
             state["status"] = "finished"
             schedule = state["schedule"]
             if schedule.get("every_days") and not state.get("next_id"):
@@ -394,6 +575,11 @@ class ReviewQueue:
                         ).strftime("%Y-%m-%d")
                 if any(digest(path) != value for path, value in state["input_hashes"].items()):
                     raise ValueError("Serieneingaben verändert; kein automatischer Folgeauftrag")
+                if state.get("photocraft_runtime"):
+                    from .photocraft import configuration
+
+                    if configuration() != state["photocraft_runtime"]:
+                        raise ValueError("PhotoCraft-Konfiguration verändert; Serie erneut prüfen")
                 child = self.submit(
                     jobs, state["templates"], state["output"], state["font"], next_schedule
                 )
@@ -403,3 +589,88 @@ class ReviewQueue:
         except Exception as exc:
             state.update(status="error", error=str(exc))
         self.save(state)
+
+    def _claim_packages(self, state: dict) -> None:
+        for package in state.get("packages", []):
+            root = Path(state["output"]) / package
+            if not root.resolve().is_relative_to(Path(state["output"])):
+                raise ValueError("Wochenordner verlässt den Ausgabeordner")
+            if package in state.get("package_claims", []):
+                if not root.is_dir():
+                    raise ValueError("Reservierter Wochenordner fehlt")
+                continue
+            marker = root / ".pshl-reservation"
+            if root.exists():
+                if not marker.is_file() or marker.read_text(encoding="utf-8") != state["id"]:
+                    raise ValueError(
+                        "Wochenordner existiert bereits; fremde Dateien werden nicht ergänzt"
+                    )
+            else:
+                root.parent.mkdir(parents=True, exist_ok=True)
+                root.mkdir()
+                with marker.open("x", encoding="utf-8") as stream:
+                    stream.write(state["id"])
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            state.setdefault("package_claims", []).append(package)
+            self.save(state)
+
+    def _publish_file(self, state: dict, item: dict) -> None:
+        if digest(item["preview"]) != item["sha256"]:
+            raise ValueError("Freigegebene Vorschau oder Report wurde verändert")
+        target = Path(item["output"])
+        if not target.resolve().is_relative_to(Path(state["output"])):
+            raise ValueError("Ausgabepfad verlässt den konfigurierten Ordner")
+        if item.get("published"):
+            if not target.exists() or digest(target) != item["sha256"]:
+                raise ValueError("Bereits veröffentlichte Datei fehlt oder wurde verändert")
+            return
+        if item.get("publishing") and target.exists() and digest(target) == item["sha256"]:
+            item["published"] = True
+            self.save(state)
+            return
+        if target.exists():
+            raise ValueError(
+                f"Ausgabe existiert bereits (auch Teilkopien werden nicht überschrieben): {target}"
+            )
+        item["publishing"] = True
+        self.save(state)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("xb") as destination, Path(item["preview"]).open("rb") as source:
+            shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        item["published"] = True
+        self.save(state)
+
+    def _publish_reports(self, state: dict) -> None:
+        if not state.get("packages"):
+            return
+        if not state.get("package_reports"):
+            state["publication_time"] = utcnow()
+            state["reviews"] = self.get(state["id"])["reviews"]
+            folder = self.root / state["id"] / "reports" / uuid4().hex
+            folder.mkdir(parents=True)
+            reports = []
+            for package in state["packages"]:
+                for name, content in report_documents(state, package).items():
+                    preview = folder / f"{hashlib.sha256(package.encode()).hexdigest()[:16]}-{name}"
+                    with preview.open("x", encoding="utf-8") as stream:
+                        json.dump(content, stream, ensure_ascii=False, indent=2)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    reports.append(
+                        {
+                            "preview": str(preview),
+                            "output": str(Path(state["output"]) / package / name),
+                            "sha256": digest(preview),
+                        }
+                    )
+            state["package_reports"] = reports
+            self.save(state)
+        for report in state["package_reports"]:
+            self._publish_file(state, report)
+        for package in state["packages"]:
+            marker = Path(state["output"]) / package / ".pshl-reservation"
+            if marker.is_file() and marker.read_text(encoding="utf-8") == state["id"]:
+                marker.unlink()

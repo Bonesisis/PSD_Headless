@@ -39,3 +39,24 @@ site/
 .pshl-state/
 *.sqlite3
 *.sqlite3-*
+# Private inputs and local workstation artifacts (shared repository rules)
+/Input_Test/
+/local-work/
+/GitHub_Update*/
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.ods
+*.csv
+*.tsv
+*.env
+*.sqlite
+*.db
+*.zip
+*.7z
+*.p8
+*.p7b
+*.p7c
+*.jks
+*.keystore
